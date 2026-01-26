@@ -1,0 +1,24 @@
+services:
+  echogram:
+    # 强制本地构建
+    build: .
+    image: echogram:latest
+    container_name: echogram
+    restart: unless-stopped
+    
+    # 环境变量配置
+    env_file:
+      - .env
+    
+    # 数据持久化
+    # 仅挂载 data 目录，让程序在目录内创建 echogram.db
+    # 避免挂载不存在的单文件导致被识别为目录
+    volumes:
+      - ./data:/app/data
+
+    # 日志配置
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,72 @@
+from telegram import Update, constants, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from core.secure import is_admin
+from core.config_service import config_service
+from dashboard.keyboards import get_main_menu_keyboard
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    处理 /start 命令
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+
+    # 1. 鉴权 & 私聊检查
+    if chat.type != constants.ChatType.PRIVATE:
+        if is_admin(user.id):
+             await update.message.reply_text("👋 管理员你好。请私聊我进行配置。")
+        else:
+             await update.message.reply_text("👋 嗨，我是 Echogram AI 伴侣。")
+        return
+
+    if not is_admin(user.id):
+        await update.message.reply_text("👋 嗨，我是 Echogram AI。目前我只服务于特定用户。")
+        return
+        
+    # 2. 检查是否需要初始化
+    # 只要没有 API Key，就认为需要初始化
+    api_key = await config_service.get_value("api_key")
+    
+    if not api_key:
+        keyboard = [[InlineKeyboardButton("🚀 开始初始化配置", callback_data="start_setup_wizard")]]
+        await update.message.reply_text(
+            f"👋 <b>欢迎回来，管理员 {user.first_name}！</b>\n\n"
+            "⚠️ 检测到核心配置缺失 (API Key)。\n"
+            "请点击下方按钮启动配置向导：",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=constants.ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text(
+            f"👋 <b>欢迎回来，管理员 {user.first_name}！</b>\n\n"
+            "系统核心已就绪。请点击下方按钮或发送 /dashboard 打开控制台。",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode=constants.ParseMode.HTML
+        )
+
+# dashboard_command 保持不变...
+async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    if not is_admin(user.id): return
+    if chat.type != constants.ChatType.PRIVATE:
+        try: await update.message.delete()
+        except: pass
+        temp_msg = await context.bot.send_message(chat.id, f"👋 嗨 {user.first_name}，控制面板已发送至私聊。", disable_notification=True)
+        try:
+            await context.bot.send_message(user.id, "<b>Echogram 控制中心</b>\n请选择配置项：", reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+            context.job_queue.run_once(lambda ctx: ctx.bot.delete_message(chat.id, temp_msg.message_id), when=5)
+        except: await context.bot.send_message(chat.id, "❌ 无法发送私信。请先私聊我发送 /start 以开启权限。")
+        return
+    await update.message.reply_text("<b>Echogram 控制中心</b>\n请选择配置项：", reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    获取当前 Chat ID (方便添加白名单)
+    """
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"🆔 <b>Current Chat ID:</b> <code>{chat.id}</code>\n"
+        f"Type: {chat.type}",
+        parse_mode=constants.ParseMode.HTML
+    )
