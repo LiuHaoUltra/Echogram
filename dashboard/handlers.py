@@ -45,20 +45,46 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # dashboard_command 保持不变...
+async def get_dashboard_overview_text() -> str:
+    """获取 Dashboard 总览文本"""
+    configs = await config_service.get_all_settings()
+    
+    base_url = configs.get("api_base_url", "未设置")
+    if len(base_url) > 25: base_url = base_url[:22] + "..."
+        
+    model = configs.get("model_name", "gpt-3.5-turbo")
+    if len(model) > 20: model = model[:18] + "..."
+        
+    limit = configs.get("context_limit", "30")
+    latency = configs.get("aggregation_latency", "10.0")
+    
+    return (
+        "<b>Echogram 控制中心</b>\n\n"
+        "📊 <b>系统概览</b>\n"
+        f"• Base URL: <code>{base_url}</code>\n"
+        f"• Main Model: <code>{model}</code>\n"
+        f"• Context Window: <code>{limit} msgs</code>\n"
+        f"• Aggregation Latency: <code>{latency} s</code>\n\n"
+        "请选择配置项："
+    )
+
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     if not is_admin(user.id): return
+    
+    overview_text = await get_dashboard_overview_text()
+    
     if chat.type != constants.ChatType.PRIVATE:
         try: await update.message.delete()
         except: pass
         temp_msg = await context.bot.send_message(chat.id, f"👋 嗨 {user.first_name}，控制面板已发送至私聊。", disable_notification=True)
         try:
-            await context.bot.send_message(user.id, "<b>Echogram 控制中心</b>\n请选择配置项：", reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+            await context.bot.send_message(user.id, overview_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
             context.job_queue.run_once(lambda ctx: ctx.bot.delete_message(chat.id, temp_msg.message_id), when=5)
         except: await context.bot.send_message(chat.id, "❌ 无法发送私信。请先私聊我发送 /start 以开启权限。")
         return
-    await update.message.reply_text("<b>Echogram 控制中心</b>\n请选择配置项：", reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+    await update.message.reply_text(overview_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
 
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """

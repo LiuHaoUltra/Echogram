@@ -21,6 +21,7 @@ def get_api_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔗 设置 Base URL", callback_data="set_api_url")],
         [InlineKeyboardButton("🔑 设置 API Key", callback_data="set_api_key")],
         [InlineKeyboardButton("🤖 设置 Model Name", callback_data="set_model_name")],
+        [InlineKeyboardButton("⏳ 设置聚合延迟 (Debounce)", callback_data="set_aggregation_latency")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -43,6 +44,7 @@ def get_access_control_keyboard() -> InlineKeyboardMarkup:
 
 def get_memory_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
+        [InlineKeyboardButton("🔢 设置上下文上限", callback_data="set_context_limit")],
         [InlineKeyboardButton("🧹 清空当前对话记忆 (慎点)", callback_data="clear_context_confirm")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]

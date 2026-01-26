@@ -47,9 +47,9 @@ def run_bot():
     
     # 2. Chat Engine Handlers (Priority: Low, catch-all)
     from telegram.ext import MessageHandler, filters
-    from core.chat_engine import process_message
+    from core.chat_engine import process_message_entry
     
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
     
     # 3. Reaction Handlers
     from telegram.ext import MessageReactionHandler

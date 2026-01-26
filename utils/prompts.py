@@ -38,8 +38,7 @@ class PromptBuilder:
     def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC") -> str:
         """
         组装 System Prompt
-        :param soul_prompt: 从配置中读取的人格设定
-        :param timezone: 时区字符串 (e.g. Asia/Shanghai)
+        优化顺序：背景/人格 -> 用户侧写 -> 关键格式指令
         """
         import pytz
         try:
@@ -50,30 +49,28 @@ class PromptBuilder:
             
         current_time = now.strftime("%Y-%m-%d %H:%M:%S %A")
         
+        # 1. 基础核心 & 时间 (保持置顶，确立基调)
         kernel = cls.KERNEL_TEMPLATE.format(current_time=current_time)
+        
+        # 2. 人格设定 (Soul)
         soul = soul_prompt if soul_prompt else cls.SOUL_TEMPLATE_DEFAULT
         
-        # 增加引用回复说明
-        reply_instruction = (
-            "\n## 3. 引用回复 (Reply Capability)\n"
-            "- 当你需要针对特定的【历史消息】进行回复时，请在该行内容的 **末尾** 使用 `\\Replay:<id>` 标记。\n"
-            "- 格式示例：`关于这个问题... \\Replay:123456`\n"
-            "- 解析器会在发送前自动移除该标记并执行引用操作。\n"
-            "- 如果回复包含多行，可对每一行分别指定引用目标；若某行无需引用，则不加标记。\n"
+        # 3. 用户侧写 (User Profile)
+        user_profile = cls.USER_TEMPLATE
+        
+        # 4. 关键功能指令 (Tools / Formatting) - 高优先级，置底
+        tools_instruction = (
+            "\n## 3. 交互协议 (Protocol) [高优先级]\n"
+            "为了实现自然交互，你必须严格遵守以下输出格式：\n\n"
+            "### (1) 引用回复 (Reply)\n"
+            "- 针对特定历史消息回复时，行末追加 `\\Replay:<msg_id>`。\n"
+            "- 示例：`关于这个话题... \\Replay:123456`\n\n"
+            "### (2) 表情回应 (Reaction)\n"
+            "- 对用户上一条消息表达态度时，单独或在文本后使用 `\\React:<emoji>`。\n"
+            "- 示例：`\\React:👍` 或 `收到 \\React:❤️`。\n"
+            "- 仅使用标准 Emoji。\n"
         )
         
-        # 增加表情回应说明
-        react_instruction = (
-            "\n## 4. 表情回应 (Reaction)\n"
-            "- 你可以使用 `\\React:<emoji>` 来对当前回复的【目标消息】（即用户的上一条消息）进行表情回应。\n"
-            "- todo: 如果要对历史消息（非上一条）进行回应，请使用格式 `\\React:<emoji>:<msg_id>`。\n"
-            "- 示例：`\\React:👍` (回应上一条) 或 `\\React:❤️:123456` (回应 ID 为 123456 的消息)。\n"
-            "- 必须使用上下文中的 `[MSG ID]` 作为目标 ID。\n"
-            "- 该指令可以单独使用，也可以与文本回复同时使用。\n"
-            "- 请仅使用 Telegram 支持的标准 Emoji。\n"
-            "- **系统通知**：如果历史记录中出现 `[System Info]`（例如用户对你的消息点赞），这是客观事实通知，**不是你自己说的话**。\n"
-        )
-        
-        return f"{kernel}\n{reply_instruction}\n{react_instruction}\n\n{soul}\n\n{cls.USER_TEMPLATE}"
+        return f"{kernel}\n\n{soul}\n\n{user_profile}\n\n{tools_instruction}"
 
 prompt_builder = PromptBuilder()

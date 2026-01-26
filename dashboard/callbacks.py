@@ -12,7 +12,8 @@ from dashboard.keyboards import (
 )
 from dashboard.states import (
     WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME,
-    WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_WHITELIST_ADD, WAITING_INPUT_WHITELIST_REMOVE
+    WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_WHITELIST_ADD, WAITING_INPUT_WHITELIST_REMOVE,
+    WAITING_INPUT_AGGREGATION_LATENCY, WAITING_INPUT_CONTEXT_LIMIT
 )
 from dashboard.model_handlers import show_model_selection_panel
 
@@ -27,8 +28,12 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     if data == "menu_main" or data == "cancel_input":
+        # Avoid circular import by importing inside function or ensure structure allows it
+        from dashboard.handlers import get_dashboard_overview_text
+        overview_text = await get_dashboard_overview_text()
+        
         await query.edit_message_text(
-            text="<b>Echogram 控制中心</b>\n请选择配置项：",
+            text=overview_text,
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
@@ -48,7 +53,16 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "set_model_name":
         # 即使是 Dashboard 修改，也展示面板
         await show_model_selection_panel(update, context)
+        await show_model_selection_panel(update, context)
         return WAITING_INPUT_MODEL_NAME
+    
+    if data == "set_aggregation_latency":
+        current_val = await config_service.get_value("aggregation_latency", "10")
+        await query.edit_message_text(
+            text=f"请输入新的 <b>聚合延迟 (秒)</b>:\n当前值: {current_val} s\n(建议 3-10 秒)", 
+            parse_mode="HTML"
+        )
+        return WAITING_INPUT_AGGREGATION_LATENCY
 
     # --- 2. 人格菜单 ---
     if data == "menu_persona":
@@ -95,6 +109,14 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "menu_memory":
         await query.edit_message_text(text="<b>🧹 记忆管理</b>", reply_markup=get_memory_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
+    
+    if data == "set_context_limit":
+        current_val = await config_service.get_value("context_limit", "30")
+        await query.edit_message_text(
+            text=f"请输入新的 <b>上下文消息数量上限</b>:\n当前值: {current_val}\n(建议 5-50，过大会消耗大量 Token)",
+            parse_mode="HTML"
+        )
+        return WAITING_INPUT_CONTEXT_LIMIT
     
     if data == "clear_context_confirm":
         # 清空记忆：假定清空当前用户（如果是私聊）或需要指定？

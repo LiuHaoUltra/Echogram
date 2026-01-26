@@ -13,7 +13,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配所有可能的“进入输入模式”的按钮 callback_data regex
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -22,6 +22,7 @@ def get_dashboard_handlers():
         states={
             WAITING_INPUT_API_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_api_url)],
             WAITING_INPUT_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_api_key)],
+            WAITING_INPUT_AGGREGATION_LATENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_aggregation_latency)],
             # 模型选择: 支持文字输入，也支持回调 (翻页/选择)
             WAITING_INPUT_MODEL_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_model_name),
@@ -35,6 +36,7 @@ def get_dashboard_handlers():
             WAITING_INPUT_SYSTEM_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_system_prompt)],
             WAITING_INPUT_WHITELIST_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.add_whitelist_id)],
             WAITING_INPUT_WHITELIST_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.remove_whitelist_id)],
+            WAITING_INPUT_CONTEXT_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_context_limit)]
         },
         fallbacks=[
             CommandHandler("dashboard", dashboard_command),
