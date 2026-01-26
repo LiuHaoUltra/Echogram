@@ -17,11 +17,15 @@ _model_cache = {}
 # User ID -> {"char": "O", "provider": "openai", "page": 0, "search_query": "gpt"}
 _nav_state = {}
 
-async def show_model_selection_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_model_selection_panel(update: Update, context: ContextTypes.DEFAULT_TYPE, target: str = "main"):
     """
     入口：展示 A-Z 字母索引
+    target: "main" | "summary"
     """
     user_id = update.effective_user.id
+    
+    # 保存选择目标
+    context.user_data['model_selection_target'] = target
     
     # 1. 确保模型数据已加载
     if user_id not in _model_cache:
@@ -50,8 +54,9 @@ async def show_model_selection_panel(update: Update, context: ContextTypes.DEFAU
             return
             
     # 2. 展示字母键盘
+    target_display = "Main" if target == "main" else "Summary"
     text = (
-        "<b>🤖 模型选择 (1/3): 索引</b>\n\n"
+        f"<b>🤖 模型选择 ({target_display}) (1/3): 索引</b>\n\n"
         "为了快速查找，请选择 **供应商名称** 的首字母：\n"
         f"(已加载 {_get_model_count(user_id)} 个模型)"
     )
@@ -70,30 +75,34 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     user_id = update.effective_user.id
     
+    # 读取目标
+    target = context.user_data.get('model_selection_target', 'main')
+    target_display = "Main" if target == "main" else "Summary"
+    
     # 确保缓存存在 (如果服务器重启了，缓存可能没了，需要重新加载)
     if user_id not in _model_cache and data != "model_idx_back":
         # 尝试重新加载，或者提示用户重试
-        await show_model_selection_panel(update, context)
+        await show_model_selection_panel(update, context, target=target)
         return
 
     # --- Level 1: 字母选择 (model_idx:A) ---
     if data.startswith("model_idx:"):
         char = data.split(":")[1]
         _update_nav_state(user_id, char=char, search_query=None) # Clear search
-        await _show_provider_list(update, user_id, char)
+        await _show_provider_list(update, user_id, char, target_display)
         return
 
     # --- Navigation: Back to Index ---
     if data == "model_idx_back":
         _update_nav_state(user_id, search_query=None) # Clear search
-        await show_model_selection_panel(update, context)
+        await show_model_selection_panel(update, context, target=target)
         return
 
     # --- Level 2: 厂商选择 (model_prov:openai) ---
     if data.startswith("model_prov:"):
         prov = data.split(":")[1]
         _update_nav_state(user_id, provider=prov, page=0) # 选中厂商，重置页码
-        await _show_model_list(update, user_id, prov, page=0)
+        await _show_model_list(update, user_id, prov, 0, target_display)
         return
 
     # --- Navigation: Back to Provider List ---
@@ -101,7 +110,7 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # 回退到厂商列表，需要知道刚才选的是哪个字母
         state = _nav_state.get(user_id, {})
         char = state.get("char", "A") # Fallback to A
-        await _show_provider_list(update, user_id, char)
+        await _show_provider_list(update, user_id, char, target_display)
         return
 
     # --- Level 3: 模型翻页 (model_page_v2:1) ---
@@ -117,20 +126,27 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             # 普通厂商模式下的翻页
             prov = state.get("provider", "openai")
-            await _show_model_list(update, user_id, prov, page=page)
+            await _show_model_list(update, user_id, prov, page, target_display)
         return
 
     # --- Level 3: 最终选择 (model_sel:openai/gpt-4) ---
     if data.startswith("model_sel:"):
         model_name = data.split(":", 1)[1] # 这里的 split 1 很重要，防止模型名里有冒号
-        await config_service.set_value("model_name", model_name)
+        
+        if target == 'summary':
+            await config_service.set_value("summary_model_name", model_name)
+            msg_text = f"✅ [Summary] 模型已切换为: <code>{model_name}</code>"
+        else:
+            await config_service.set_value("model_name", model_name)
+            msg_text = f"✅ [Main] 模型已切换为: <code>{model_name}</code>"
         
         # 清理缓存
         _model_cache.pop(user_id, None)
         _nav_state.pop(user_id, None)
+        context.user_data.pop('model_selection_target', None)
         
         await query.edit_message_text(
-            f"✅ 模型已切换为: <code>{model_name}</code>",
+            msg_text,
             reply_markup=get_main_menu_keyboard(),
             parse_mode="HTML"
         )
@@ -187,7 +203,7 @@ async def perform_model_search(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- Helpers ---
 
-async def _show_provider_list(update: Update, user_id: int, char: str):
+async def _show_provider_list(update: Update, user_id: int, char: str, target_display: str = "Main"):
     """展示属于该首字母的 Provider 列表"""
     models = _model_cache.get(user_id, [])
     # 提取所有 Provider
@@ -212,13 +228,13 @@ async def _show_provider_list(update: Update, user_id: int, char: str):
 
     keyboard = get_provider_list_keyboard(sorted_provs)
     text = (
-        f"<b>🤖 模型选择 (2/3): 供应商</b>\n\n"
+        f"<b>🤖 模型选择 ({target_display}) (2/3): 供应商</b>\n\n"
         f"索引: <b>{char}</b>\n"
         "请选择模型供应商："
     )
     await update.callback_query.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
 
-async def _show_model_list(update: Update, user_id: int, provider: str, page: int):
+async def _show_model_list(update: Update, user_id: int, provider: str, page: int, target_display: str = "Main"):
     """展示特定 Provider 的模型"""
     all_models = _model_cache.get(user_id, [])
     
@@ -237,7 +253,7 @@ async def _show_model_list(update: Update, user_id: int, provider: str, page: in
     
     keyboard = get_model_selection_keyboard_v2(target_models, page=page)
     text = (
-        f"<b>🤖 模型选择 (3/3): 模型</b>\n\n"
+        f"<b>🤖 模型选择 ({target_display}) (3/3): 模型</b>\n\n"
         f"供应商: <b>{provider}</b>\n"
         f"共找到 {len(target_models)} 个模型。\n"
         "请点击选择："

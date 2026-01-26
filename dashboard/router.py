@@ -33,6 +33,11 @@ def get_dashboard_handlers():
                  MessageHandler(filters.TEXT & ~filters.COMMAND, model_handlers.perform_model_search),
                  CallbackQueryHandler(model_handlers.handle_model_callback) # Allow cancel/back
             ],
+            # [NEW] 摘要模型设置
+            WAITING_INPUT_SUMMARY_MODEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_summary_model),
+                CallbackQueryHandler(model_handlers.handle_model_callback)
+            ],
             WAITING_INPUT_SYSTEM_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_system_prompt)],
             WAITING_INPUT_WHITELIST_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.add_whitelist_id)],
             WAITING_INPUT_WHITELIST_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.remove_whitelist_id)],
@@ -60,6 +65,13 @@ def get_dashboard_handlers():
             WIZARD_INPUT_MODEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_model),
                 CallbackQueryHandler(model_handlers.handle_model_callback)
+            ],
+            # [NEW] Wizard 摘要模型
+            WIZARD_INPUT_SUMMARY_MODEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_summary_model),
+                CallbackQueryHandler(wizard_handlers.wizard_use_default_url, pattern="^use_default_url$"), # Reusing pattern? No, we don't need this here.
+                # Use wrapper for model selection
+                CallbackQueryHandler(wizard_handlers.wizard_model_callback_wrapper)
             ],
             # Wizard 时区设置
             WIZARD_INPUT_TIMEZONE: [

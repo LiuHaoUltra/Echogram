@@ -6,11 +6,14 @@ import re
 from core.access_service import access_service
 from core.history_service import history_service
 from core.config_service import config_service
+from core.memory_service import memory_service
 from core.secure import is_admin
 from core.lazy_sender import lazy_sender
 from utils.logger import logger
 from utils.prompts import prompt_builder
+import asyncio # Ensure asyncio is imported
 
+# ... (process_message_entry remains unchanged) -> Restoring logic
 async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     HTTP/Telegram 消息入口
@@ -72,7 +75,6 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     # 将任务交给 LazySender，它会在防抖结束后调用 generate_response
     await lazy_sender.on_message(chat.id, context)
 
-
 async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     """
     核心回复生成逻辑 (将被 LazySender 回调)
@@ -96,8 +98,15 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, "⚠️ 尚未配置 API Key，请使用 /dashboard 配置。")
         return
 
-    # 组装 System Prompt (注入时间与时区)
-    system_content = prompt_builder.build_system_prompt(system_prompt_custom, timezone=timezone)
+    # [NEW] 获取长期记忆摘要
+    dynamic_summary = await memory_service.get_latest_summary(chat_id)
+
+    # 组装 System Prompt (注入时间与时区 + Summary)
+    system_content = prompt_builder.build_system_prompt(
+        system_prompt_custom, 
+        timezone=timezone, 
+        dynamic_summary=dynamic_summary
+    )
     
     # 获取历史记录 (Rolling Context)
     history_msgs = await history_service.get_recent_context(chat_id, limit=context_limit)
@@ -139,8 +148,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             messages.append({"role": "assistant", "content": h.content})
         
     # --- 3. 调用 API ---
-    # 发送 "正在输入..." 状态
-    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+    # [Removal] 移除预先的正在输入状态，改为在生成后根据字数模拟
+    # await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
     
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
@@ -158,6 +167,18 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
              reply_content = response.choices[0].message.content.strip()
              
         logger.info(f"RAW LLM OUTPUT: {reply_content!r}")
+
+        # [NEW] 响应隔离处理
+        # 1. 优先尝试提取 <chat>...</chat>
+        chat_match = re.search(r"<chat>(.*?)</chat>", reply_content, flags=re.DOTALL)
+        if chat_match:
+            reply_content = chat_match.group(1).strip()
+        else:
+            # 如果未找到 <chat> 标签，记录警告，但为了防止丢消息，暂且保留原始内容
+            # 信任 Prompt 指令已足够强
+            logger.warning("Response Protocol Violation: No <chat> tags found in LLM output.")
+
+        # 防御性清洗 (System tags)
 
         # 防御性清洗
         reply_content = re.sub(r"^(\s*\[[^\]]+\])+", "", reply_content).strip()
@@ -212,7 +233,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
         reply_parts = split_message(reply_content)
         
-        for part in reply_parts:
+        for i, part in enumerate(reply_parts):
             target_id = None
             clean_part = part
             
@@ -226,6 +247,24 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             
             if not clean_part:
                 continue
+
+            # [NEW] 拟人化打字延迟逻辑
+            
+            # 1. 多条消息之间的间隔 (1秒)
+            if i > 0:
+                await asyncio.sleep(1.0)
+            
+            # 2. 计算打字时间
+            # 规则：未包含命令的纯文本长度，每个字 0.2 秒
+            typing_duration = len(clean_part) * 0.2
+            
+            # 发送 Typing 状态
+            await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+            
+            # 等待模拟打字
+            # 注意：Telegram Typing status 持续 5s，如果 duration > 5s，它会消失。
+            # 为了更真实，这里可以每 4.5s 补发一次，但为了简洁，暂且只发一次。
+            await asyncio.sleep(typing_duration)
 
             try:
                 if target_id:
@@ -241,6 +280,12 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         
         # 保存 AI 回复
         await history_service.add_message(chat_id, "assistant", reply_content)
+        
+        # [NEW] 触发后台总结任务 (Fire-and-Forget)
+        try:
+            asyncio.create_task(memory_service.check_and_summarize(chat_id))
+        except Exception as e:
+            logger.error(f"Failed to trigger summary task: {e}")
 
     except Exception as e:
         logger.error(f"API Call failed: {e}")
@@ -284,5 +329,5 @@ async def process_reaction_update(update: Update, context: ContextTypes.DEFAULT_
         content=content
     )
 
-# 绑定 LazySender 回调
+    # 绑定 LazySender 回调
 lazy_sender.set_callback(generate_response)

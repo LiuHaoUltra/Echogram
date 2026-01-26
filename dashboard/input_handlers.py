@@ -70,6 +70,17 @@ async def remove_whitelist_id(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 # --- Memory Settings ---
+async def save_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    
+    if text.lower() in ["default", "reset"]:
+        await config_service.set_value("summary_model_name", "")
+        await update.message.reply_text("✅ 已重置摘要模型（将跟随主模型）。", reply_markup=get_memory_keyboard())
+    else:
+        await config_service.set_value("summary_model_name", text)
+        await update.message.reply_text(f"✅ 摘要模型已设置为: {text}", reply_markup=get_memory_keyboard())
+    return ConversationHandler.END
+
 async def save_context_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     try:

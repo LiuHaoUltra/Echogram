@@ -13,7 +13,8 @@ from dashboard.keyboards import (
 from dashboard.states import (
     WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME,
     WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_WHITELIST_ADD, WAITING_INPUT_WHITELIST_REMOVE,
-    WAITING_INPUT_AGGREGATION_LATENCY, WAITING_INPUT_CONTEXT_LIMIT
+    WAITING_INPUT_AGGREGATION_LATENCY, WAITING_INPUT_CONTEXT_LIMIT,
+    WAITING_INPUT_SUMMARY_MODEL
 )
 from dashboard.model_handlers import show_model_selection_panel
 
@@ -30,7 +31,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "menu_main" or data == "cancel_input":
         # Avoid circular import by importing inside function or ensure structure allows it
         from dashboard.handlers import get_dashboard_overview_text
-        overview_text = await get_dashboard_overview_text()
+        overview_text = await get_dashboard_overview_text(update.effective_chat.id)
         
         await query.edit_message_text(
             text=overview_text,
@@ -52,9 +53,17 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         return WAITING_INPUT_API_KEY
     if data == "set_model_name":
         # 即使是 Dashboard 修改，也展示面板
-        await show_model_selection_panel(update, context)
-        await show_model_selection_panel(update, context)
+        # target='main' is default, but explicit is better
+        await show_model_selection_panel(update, context, target="main")
         return WAITING_INPUT_MODEL_NAME
+        
+    if data == "set_summary_model":
+        await show_model_selection_panel(update, context, target="summary")
+        return WAITING_INPUT_SUMMARY_MODEL
+        
+    if data == "set_summary_model":
+        await show_model_selection_panel(update, context, target="summary")
+        return WAITING_INPUT_SUMMARY_MODEL
     
     if data == "set_aggregation_latency":
         current_val = await config_service.get_value("aggregation_latency", "10")
@@ -109,6 +118,9 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "menu_memory":
         await query.edit_message_text(text="<b>🧹 记忆管理</b>", reply_markup=get_memory_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
+    
+    # Removed old text-based set_summary_model handler block from here since it is now handled above via panel
+
     
     if data == "set_context_limit":
         current_val = await config_service.get_value("context_limit", "30")

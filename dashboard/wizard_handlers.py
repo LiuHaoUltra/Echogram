@@ -149,7 +149,68 @@ async def wizard_save_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     await config_service.set_value("model_name", text)
     
+    return await _ask_summary_model(update, context)
+
+# 5. Step 5: Summary Model (New)
+async def _ask_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "<b>🚀系统初始化向导 (5/5)</b>\n\n"
+        "配置 **长期记忆摘要模型**。\n"
+        "建议使用更便宜、速度更快的模型 (如 `gpt-4o-mini`) 来处理后台摘要任务，以节省成本。\n"
+        "如果不设置，将默认使用主模型。"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")
+    
+    # 使用面板，设置 target='summary'
+    # 注意：wizard 状态机需要能够处理从面板返回的回调
+    # 我们这里直接调用面板，用户点击后会触发 handle_model_callback
+    # handle_model_callback 会结束 ConversationHandler.END ??? 
+    # 不，handle_model_callback 返回 END。这在 Wizard 中是个问题。
+    # Wizard 是个 ConversationHandler。
+    # 如果 handle_model_callback 返回 END，整个 Wizard 就结束了，_finalize_wizard 就没机会跑了。
+    
+    # 解决方案：
+    # Wizard 中的 handle_model_callback 需要特殊处理吗？
+    # 或者我们在 router 中，把 Wizard 的 WIZARD_INPUT_SUMMARY_MODEL 状态下的 callback 指向一个特殊的 handler？
+    # 是的，我们需要一个 wizard_handle_summary_model_callback。
+    
+    # 但 model_handlers.handle_model_callback 逻辑比较复杂（翻页等）。复制一份太冗余。
+    # 我们可以复用逻辑，但返回值需要控制。
+    
+    # 鉴于 Wizard 流程的线性，我们不妨让这一步简单点：
+    # 提供两个按钮："使用主模型(跳过)" 和 "手动输入/选择"？
+    # 为了复用面板，我们可以在 wizard_handlers 里写一个 wrapper。
+    
+    await show_model_selection_panel(update, context, target="summary")
+    return WIZARD_INPUT_SUMMARY_MODEL
+
+async def wizard_save_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 手动输入的情况
+    text = update.message.text.strip()
+    if text.lower() not in ["skip", "跳过"]:
+        await config_service.set_value("summary_model_name", text)
+    
     return await _finalize_wizard(update, context)
+
+async def wizard_skip_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    # 设为空，即跟随主模型
+    await config_service.set_value("summary_model_name", "")
+    return await _finalize_wizard(update, context)
+
+from dashboard.model_handlers import handle_model_callback
+
+async def wizard_model_callback_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Wrapper to handle model selection within Wizard.
+    If handle_model_callback returns END, we proceed to finalize wizard.
+    Otherwise we stay in WIZARD_INPUT_SUMMARY_MODEL.
+    """
+    res = await handle_model_callback(update, context)
+    if res == ConversationHandler.END:
+        return await _finalize_wizard(update, context)
+    return WIZARD_INPUT_SUMMARY_MODEL
 
 # Finalize
 async def _finalize_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):

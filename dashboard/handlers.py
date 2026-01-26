@@ -45,26 +45,42 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # dashboard_command 保持不变...
-async def get_dashboard_overview_text() -> str:
+async def get_dashboard_overview_text(chat_id: int = 0) -> str:
     """获取 Dashboard 总览文本"""
     configs = await config_service.get_all_settings()
     
     base_url = configs.get("api_base_url", "未设置")
-    if len(base_url) > 25: base_url = base_url[:22] + "..."
+    if len(base_url) > 50: base_url = base_url[:47] + "..."
         
     model = configs.get("model_name", "gpt-3.5-turbo")
-    if len(model) > 20: model = model[:18] + "..."
+    if len(model) > 30: model = model[:27] + "..."
+
+    summary_model = configs.get("summary_model_name")
+    if not summary_model:
+        summary_model_disp = "<i>(Same as Main)</i>"
+    else:
+        if len(summary_model) > 30: summary_model = summary_model[:27] + "..."
+        summary_model_disp = f"<code>{summary_model}</code>"
         
     limit = configs.get("context_limit", "30")
     latency = configs.get("aggregation_latency", "10.0")
+
+    # 获取最后总结时间
+    last_summary = "N/A"
+    if chat_id:
+        # Avoid circular import at top level
+        from core.memory_service import memory_service
+        last_summary = await memory_service.get_latest_summary_time(chat_id)
     
     return (
         "<b>Echogram 控制中心</b>\n\n"
         "📊 <b>系统概览</b>\n"
         f"• Base URL: <code>{base_url}</code>\n"
         f"• Main Model: <code>{model}</code>\n"
+        f"• Summary Model: {summary_model_disp}\n"
         f"• Context Window: <code>{limit} msgs</code>\n"
-        f"• Aggregation Latency: <code>{latency} s</code>\n\n"
+        f"• Aggregation Latency: <code>{latency} s</code>\n"
+        f"• Last Summary: <code>{last_summary}</code>\n\n"
         "请选择配置项："
     )
 
@@ -73,7 +89,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if not is_admin(user.id): return
     
-    overview_text = await get_dashboard_overview_text()
+    overview_text = await get_dashboard_overview_text(user.id)
     
     if chat.type != constants.ChatType.PRIVATE:
         try: await update.message.delete()
