@@ -39,10 +39,14 @@
 3.  粘贴以下内容：
 
 ```text
-start - 开始对话
-dashboard - 打开控制面板 (仅管理员)
-clear - 清除当前上下文记忆
-help - 获取帮助信息
+dashboard - 打开控制面板（全局）
+prompt - 预览下轮提示词（仅群组）
+stats - 查看记忆状态（仅群组）
+reset - 清空群组记忆（仅群组）
+add_whitelist - 加入白名单（仅群组）
+remove_whitelist - 移出白名单（仅群组）
+debug - 查看系统日志（全局）
+id - 获取 ChatID（全局）
 ```
 
 ## 5. 允许群组访问 (可选)
