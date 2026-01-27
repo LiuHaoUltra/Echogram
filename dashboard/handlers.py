@@ -69,7 +69,7 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
         f"• Main Model: <code>{model}</code>\n"
         f"• Summary Model: {summary_model_disp}\n"
         f"• Aggregation Latency: <code>{latency} s</code>\n"
-        f"• Token Limit: <code>{configs.get('history_tokens', str(settings.HISTORY_WINDOW_TOKENS))} tokens</code>\n\n"
+        f"• Memory & Archiving Threshold (T): <code>{configs.get('history_tokens', str(settings.HISTORY_WINDOW_TOKENS))} tokens</code>\n\n"
         "请选择配置项："
     )
 

@@ -45,7 +45,7 @@ def get_access_control_keyboard() -> InlineKeyboardMarkup:
 
 def get_memory_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("🔢 设置历史 Token 上限", callback_data="set_history_tokens")],
+        [InlineKeyboardButton("🔢 设置记忆长度 (T)", callback_data="set_history_tokens")],
         [InlineKeyboardButton("🚨 恢复出厂设置 (Danger)", callback_data="factory_reset_request")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]

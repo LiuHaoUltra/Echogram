@@ -143,7 +143,15 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         from config.settings import settings
         current_val = await config_service.get_value("history_tokens", str(settings.HISTORY_WINDOW_TOKENS))
         await query.edit_message_text(
-            text=f"请输入新的 <b>历史记录 Token 上限</b>:\n当前值: {current_val}\n(范围: 300-100000，建议 2000-16000)",
+            text=(
+                f"🔢 <b>设置对话记忆长度 (Threshold T)</b>\n\n"
+                f"当前值: <code>{current_val}</code>\n\n"
+                "此参数决定两个核心逻辑：\n"
+                "1. <b>活跃记忆</b>：AI 始终能看到最近 T 个 Token 的原始对话。\n"
+                "2. <b>归档触发</b>：当“溢出”出活跃窗口的消息也达到 T 个 Token 时，将自动触发一次远程归档（总结）。\n\n"
+                "📊 <i>建议值：500 - 8000 (根据模型能力决定)</i>\n"
+                "请直接发送数字："
+            ),
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )

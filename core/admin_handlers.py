@@ -47,36 +47,63 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 获取动态配置
     configs = await config_service.get_all_settings()
-    token_limit = int(configs.get("history_tokens", settings.SUMMARY_TRIGGER_TOKENS))
-    logger.info(f"Stats command for {chat.id}: current_token_limit={token_limit}")
+    T = int(configs.get("history_tokens", settings.HISTORY_WINDOW_TOKENS))
     
-    # 获取数据口径对齐：仅统计自上次总结以来的 Token
+    # 获取归档状态
     from core.summary_service import summary_service
     status = await summary_service.get_status(chat.id)
-    last_id = status["last_id"]
+    last_summarized_id = status["last_id"]
     last_summary_time = status["updated_at"]
     
-    # 获取新增消息并计算 Token
+    # 获取消息并识别活跃窗口
     from config.database import get_db_session
     from models.history import History
     from core.history_service import history_service
+    from sqlalchemy import select
     
-    current_tokens = 0
+    buffer_tokens = 0
+    active_tokens = 0
+    
     async for session in get_db_session():
-        from sqlalchemy import select
-        stmt = select(History).where((History.chat_id == chat.id) & (History.id > last_id))
-        result = await session.execute(stmt)
-        new_msgs = result.scalars().all()
+        stmt_all = select(History).where(History.chat_id == chat.id).order_by(History.id.desc())
+        result_all = await session.execute(stmt_all)
+        all_msgs = result_all.scalars().all()
         
-        text_buffer = ""
-        for m in new_msgs:
-            text_buffer += f"{m.role}: {m.content}\n"
-        current_tokens = history_service.count_tokens(text_buffer)
+        if not all_msgs:
+            break
+
+        # 识别活跃窗口起始 ID
+        curr_t = 0
+        win_start_id = all_msgs[0].id
+        for m in all_msgs:
+            t = history_service.count_tokens(f"{m.role}: {m.content}\n")
+            if curr_t + t > T and curr_t > 0:
+                break
+            curr_t += t
+            active_tokens = curr_t
+            win_start_id = m.id
+            
+        # 计算缓冲区 (位于 last_summarized_id 和 win_start_id 之间)
+        buffer_text = ""
+        for m in all_msgs:
+            if last_summarized_id < m.id < win_start_id:
+                buffer_text += f"{m.role}: {m.content}\n"
+        buffer_tokens = history_service.count_tokens(buffer_text)
     
-    # 计算占比
-    usage_percent = round((current_tokens / token_limit) * 100, 1) if token_limit > 0 else 0
+    # 判断会话状态与进度条口径
+    if buffer_tokens > 0:
+        session_state = "🔄 Rolling (Archiving)"
+        progress_label = "Archiving Buffer (Pending Summary)"
+        current_val = buffer_tokens
+        usage_percent = round((buffer_tokens / T) * 100, 1) if T > 0 else 0
+    else:
+        session_state = "🌱 Growing (Linear)"
+        progress_label = "Memory Growth (Direct Memory)"
+        current_val = active_tokens
+        usage_percent = round((active_tokens / T) * 100, 1) if T > 0 else 0
+
     bar_len = 10
-    filled_len = int(bar_len * (current_tokens / token_limit)) if token_limit > 0 else 0
+    filled_len = int(bar_len * (current_val / T)) if T > 0 else 0
     if filled_len > bar_len: filled_len = bar_len
     progress_bar = "█" * filled_len + "░" * (bar_len - filled_len)
 
@@ -86,9 +113,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"📊 <b>Session Statistics</b>\n\n"
         f"🆔 Chat ID: <code>{chat.id}</code>\n"
-        f"🧠 Memory Usage (Pending Summary):\n"
+        f"📈 <b>Session State</b>: <code>{session_state}</code>\n\n"
+        f"🧠 <b>{progress_label}</b>:\n"
         f"<code>{progress_bar} {usage_percent}%</code>\n"
-        f"({current_tokens} / {token_limit} tokens)\n\n"
+        f"({current_val} / {T} tokens)\n\n"
+        f"👀 <b>Active Window</b> (Direct Memory):\n"
+        f"<code>{active_tokens} tokens</code>\n\n"
         f"🕒 Last Summary: {time_str}"
     )
     

@@ -179,32 +179,43 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
              
         logger.info(f"RAW LLM OUTPUT: {reply_content!r}")
 
-        # 响应隔离
-        # 提取 <chat> 标签内容
-        chat_match = re.search(r"<chat>(.*?)</chat>", reply_content, flags=re.DOTALL)
-        if chat_match:
-            reply_content = chat_match.group(1).strip()
-        else:
-            # 未找到标签时记录警告
-            logger.warning("Response Protocol Violation: No <chat> tags found in LLM output.")
-
-        # 防御性清洗 (System tags)
-
-        # 防御性清洗
-        reply_content = re.sub(r"^(\s*\[[^\]]+\])+", "", reply_content).strip()
-        reply_content = re.sub(r"\[MSG\s*[^\]]+\]", "", reply_content)
-        reply_content = re.sub(r"\[\d{4}-\d{2}-\d{2}.*?\]", "", reply_content)
-        reply_content = reply_content.replace("\\n", "\n")
-        reply_content = reply_content.strip()
-
-        if not reply_content:
-             reply_content = "..." 
-
-        # 回复用户
-        from utils.splitter import split_message
+        # 1. 响应隔离与指令解析 (Tag-Driven Protocol)
+        # 提取所有 <chat> 标签及其属性/内容
+        # 格式：<chat reply="123" react="👍">内容</chat>
+        tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
+        matches = list(re.finditer(tag_pattern, reply_content, flags=re.DOTALL))
         
-        # 解析并执行所有 React 指令
-        # Telegram 官方支持的免费基础 Emoji 白名单 (部分常用)
+        if not matches:
+             logger.warning("Response Protocol Violation: No <chat> tags found in LLM output.")
+             # 防御性处理：如果没有标签，尝试发送原始响应（或清洗后的）
+             reply_blocks = [{"content": reply_content.strip(), "reply": None, "react": None}]
+        else:
+             reply_blocks = []
+             for m in matches:
+                 attrs_raw = m.group("attrs")
+                 content = m.group("content").strip()
+                 
+                 # 解析属性 (reply="xxx" react="xxx")
+                 reply_id = None
+                 react_emoji = None
+                 
+                 reply_match = re.search(r'reply=["\'](\d+)["\']', attrs_raw)
+                 if reply_match:
+                     reply_id = int(reply_match.group(1))
+                     
+                 # 提取表情：支持单引号、双引号，或者直接是 Emoji
+                 react_match = re.search(r'react=["\']([^"\']+)["\']', attrs_raw)
+                 if react_match:
+                     react_emoji = react_match.group(1).strip()
+                 
+                 if content or react_emoji:
+                     reply_blocks.append({
+                         "content": content if content else "...",
+                         "reply": reply_id,
+                         "react": react_emoji
+                     })
+
+        # 2. 回复发送逻辑
         TG_FREE_REACTIONS = {
             "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", 
             "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊️", "🤡", 
@@ -214,93 +225,79 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             "🤗", "🫡", "🎅", "🎄", "☃️", "💅", "🤪", "🗿", "🆒", "💘", 
             "🙊", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️", "🤷", "🤷‍♀️", "😡"
         }
-        
-        react_pattern = r"(?:\\|/)?React[:\s]+([^:\s\n]+)(?::(\d+))?"
-        all_reacts = re.findall(react_pattern, reply_content, re.IGNORECASE)
-        
-        for emoji, target_id_str in all_reacts:
-            # 清洗 Emoji：移除可能存在的额外空格或非法字符
-            cleaned_emoji = emoji.strip()
-            
-            if cleaned_emoji not in TG_FREE_REACTIONS:
-                logger.warning(f"Reaction ignored: '{cleaned_emoji}' is not in TG free whitelist.")
-                continue
 
-            try:
-                target_id = None
-                if target_id_str:
-                    target_id = int(target_id_str)
+        for i, block in enumerate(reply_blocks):
+            content = block["content"]
+            target_reply_id = block["reply"]
+            target_react_emoji = block["react"]
+
+            # --- A. 处理表情回应 (Reaction) ---
+            if target_react_emoji:
+                # 解析 EMOJI:ID 格式
+                react_id = None
+                react_emoji_part = target_react_emoji
+                if ":" in target_react_emoji:
+                    parts = target_react_emoji.split(":", 1)
+                    react_emoji_part = parts[0].strip()
+                    try:
+                        react_id = int(parts[1].strip())
+                    except:
+                        pass
+
+                if react_emoji_part in TG_FREE_REACTIONS:
+                    try:
+                        # 确定目标 ID
+                        react_target_id = react_id # 优先使用显示指定的 ID
+                        if not react_target_id:
+                            react_target_id = target_reply_id # 其次使用回复目标的 ID
+                        
+                        if not react_target_id:
+                            # 最后使用最后一条用户消息 ID
+                            last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
+                            if last_user_msg:
+                                react_target_id = last_user_msg.message_id
+                        
+                        if react_target_id:
+                            from telegram import ReactionTypeEmoji
+                            await context.bot.set_message_reaction(
+                                chat_id=chat_id,
+                                message_id=react_target_id,
+                                reaction=[ReactionTypeEmoji(react_emoji_part)]
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to set reaction ({react_emoji_part}) on MSG {react_target_id}: {e}")
                 else:
-                    # 默认回应最后一条用户消息
-                    last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
-                    if last_user_msg:
-                        target_id = last_user_msg.message_id
-                
-                if target_id:
-                    from telegram import ReactionTypeEmoji
-                    await context.bot.set_message_reaction(
-                        chat_id=chat_id,
-                        message_id=target_id,
-                        reaction=[ReactionTypeEmoji(cleaned_emoji)]
-                    )
-            except Exception as e:
-                logger.warning(f"Failed to set reaction ({cleaned_emoji}) on MSG {target_id}: {e}")
+                    logger.warning(f"Reaction ignored: '{react_emoji_part}' not in whitelist.")
 
-        # 从回复中彻底移除所有 React 指令内容
-        reply_content = re.sub(react_pattern, "", reply_content, flags=re.IGNORECASE).strip()
-        
-        if not reply_content and react_emoji:
-            return 
-
-        if not reply_content:
-            reply_content = "..."
-
-        reply_parts = split_message(reply_content)
-        
-        for i, part in enumerate(reply_parts):
-            target_id = None
-            clean_part = part
-            
-            replay_pattern = r"(?:\\|/)?Repla?y[:\s]+(\d+)"
-            match = re.search(replay_pattern, part, re.IGNORECASE)
-            if match:
-                try:
-                    target_id = int(match.group(1))
-                    # 全局清洗该片段中的所有回复指令
-                    clean_part = re.sub(replay_pattern, "", part, flags=re.IGNORECASE).strip()
-                except:
-                    pass
-            
-            if not clean_part:
+            # --- B. 处理消息发送 (Message) ---
+            if not content or content == "...":
+                # 如果只有 Reaction 没有正文
                 continue
 
-            # 拟人化打字延迟
-            
-            # 多条消息间隔 (1秒)
+            # 拟人化延迟逻辑
             if i > 0:
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(1.0) # 气泡间隔
             
-            # 计算打字时间
-            # 规则：每个字 0.2 秒
-            typing_duration = len(clean_part) * 0.2
+            # 计算打字时长
+            typing_duration = min(len(content) * 0.15, 3.0) # 上限 3 秒，防止过长等待
             
-            # 发送 Typing 状态
             await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
-            
-            # 等待模拟打字
             await asyncio.sleep(typing_duration)
 
             try:
-                if target_id:
-                    await context.bot.send_message(chat_id=chat_id, text=clean_part, reply_to_message_id=target_id)
-                else:
-                    await context.bot.send_message(chat_id=chat_id, text=clean_part)
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=content, 
+                    reply_to_message_id=target_reply_id
+                )
             except Exception as e:
-                logger.warning(f"Failed to send message: {e}")
-                try:
-                     await context.bot.send_message(chat_id=chat_id, text=clean_part)
-                except:
-                    pass
+                logger.warning(f"Failed to send message part {i}: {e}")
+                # 最后的防御：不带引用重试
+                if target_reply_id:
+                    try:
+                        await context.bot.send_message(chat_id=chat_id, text=content)
+                    except:
+                        pass
         
         # 保存 AI 回复
         await history_service.add_message(chat_id, "assistant", reply_content)

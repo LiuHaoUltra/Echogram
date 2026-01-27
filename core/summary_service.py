@@ -86,10 +86,11 @@ class SummaryService:
             from core.config_service import config_service
             configs = await config_service.get_all_settings()
             
-            token_threshold = int(configs.get("history_tokens", settings.SUMMARY_TRIGGER_TOKENS))
+            # T = 对话记忆长度 (活跃窗口)
+            T = int(configs.get("history_tokens", settings.HISTORY_WINDOW_TOKENS))
             idle_seconds = int(configs.get("summary_idle_seconds", settings.SUMMARY_IDLE_SECONDS))
 
-            # 获取当前摘要
+            # 1. 获取全量未总结消息 (从 last_id 之后开始)
             stmt = select(UserSummary).where(UserSummary.chat_id == chat_id)
             result = await session.execute(stmt)
             user_summary = result.scalar_one_or_none()
@@ -97,69 +98,89 @@ class SummaryService:
             last_id = user_summary.last_summarized_msg_id if user_summary else 0
             old_summary = user_summary.content if user_summary else ""
 
-            # 获取新增消息
-            stmt_msgs = select(History).where(
-                (History.chat_id == chat_id) & 
-                (History.id > last_id)
-            ).order_by(History.id.asc())
+            # 获取该 Chat 的所有消息以计算活跃窗口
+            stmt_all = select(History).where(History.chat_id == chat_id).order_by(History.id.desc())
+            result_all = await session.execute(stmt_all)
+            all_msgs = result_all.scalars().all()
             
-            result_msgs = await session.execute(stmt_msgs)
-            new_msgs = result_msgs.scalars().all()
+            if not all_msgs: return
+
+            # 2. 识别活跃窗口 (Active Window)
+            # 从后往前数，直到满 T tokens
+            active_ids = set()
+            curr_tokens = 0
+            win_start_id = all_msgs[0].id # 默认为最后一条
             
-            if not new_msgs:
+            # 这里的顺序是 desc
+            for msg in all_msgs:
+                msg_text = f"{msg.role}: {msg.content}\n"
+                t = history_service.count_tokens(msg_text)
+                if curr_tokens + t > T and curr_tokens > 0:
+                    break
+                curr_tokens += t
+                active_ids.add(msg.id)
+                win_start_id = msg.id
+
+            # 3. 识别缓冲区 (Buffer)
+            # Buffer = 已经在 last_id 之后，但不在活跃窗口内的消息
+            buffer_msgs = [m for m in reversed(all_msgs) if last_id < m.id < win_start_id]
+            
+            if not buffer_msgs:
+                logger.debug(f"Summary Check for {chat_id}: Buffer is empty (All messages are in Active Window).")
                 return
 
-            # 计算 Trigger 条件
             text_buffer = ""
-            for msg in new_msgs:
+            for msg in buffer_msgs:
                 text_buffer += f"{msg.role}: {msg.content}\n"
             
-            total_tokens = history_service.count_tokens(text_buffer)
+            buffer_tokens = history_service.count_tokens(text_buffer)
             
-            last_msg_time = new_msgs[-1].timestamp
-            # 检查空闲时间
-            # Assuming utcnow for coherence with models.
+            # 4. 检查触发条件
+            last_msg_time = all_msgs[0].timestamp
             idle_delta = (datetime.utcnow() - last_msg_time).total_seconds()
             is_idle = idle_delta > idle_seconds
             
-            # 是否触发
-            should_summarize = (total_tokens >= token_threshold) or is_idle
+            # 触发条件：缓冲区满 T，或者处于闲置状态
+            should_summarize = (buffer_tokens >= T) or (is_idle and buffer_tokens > 0)
             
-            logger.info(f"Summary Check for {chat_id}: Tokens={total_tokens}/{token_threshold}, Idle={idle_delta:.0f}/{idle_seconds}, ShouldTrigger={should_summarize}")
+            logger.info(f"Summary Check for {chat_id}: Buffer={buffer_tokens}/{T}, Idle={idle_delta:.0f}/{idle_seconds}, ShouldTrigger={should_summarize}")
 
             if should_summarize:
+                # 仅对缓冲区内容进行归档
                 new_summary = await self._run_llm_summary(old_summary, text_buffer)
                 if new_summary:
-                    # 更新数据库
+                    # 更新数据库，指针指向缓冲区最后一条消息
+                    final_id = buffer_msgs[-1].id
                     stmt_upsert = insert(UserSummary).values(
                         chat_id=chat_id,
                         content=new_summary,
-                        last_summarized_msg_id=new_msgs[-1].id,
+                        last_summarized_msg_id=final_id,
                         updated_at=datetime.utcnow()
                     ).on_conflict_do_update(
                         index_elements=['chat_id'],
                         set_={
                             "content": new_summary, 
-                            "last_summarized_msg_id": new_msgs[-1].id,
+                            "last_summarized_msg_id": final_id,
                             "updated_at": datetime.utcnow()
                         }
                     )
                     await session.execute(stmt_upsert)
                     await session.commit()
-                    logger.info(f"Successfully SAVED summary for {chat_id}. Content length: {len(new_summary)}. New Pointer: {new_msgs[-1].id}")
+                    logger.info(f"Successfully ARCHIVED buffer for {chat_id}. Buffer Tokens: {buffer_tokens}. New Pointer: {final_id}")
 
     async def _run_llm_summary(self, old_summary: str, new_content: str) -> str:
         """调用 LLM 生成新摘要"""
         system_prompt = (
-            "你是一个专业的记录员。你的任务是维护关于用户的长期记忆摘要（Summary）。\n"
-            "输入包括：\n"
-            "1. 旧的摘要 (Old Summary)\n"
-            "2. 新的对话片段 (New Interaction)\n\n"
-            "要求：\n"
-            "- 整合新信息到摘要中，更新用户的事实、偏好、性格特征。\n"
-            "- 保持摘要简练、客观、高密度。\n"
-            "- 如果新对话没有提供有价值的信息，保持原样。\n"
-            "- 输出必须纯文本，不要 markdown 格式，不要废话。"
+            "你是一个专业的会话记忆管家。你的任务是将新发生的对话片段整合进用户的【长期记忆摘要】中。\n\n"
+            "### 记录原则 (Priority):\n"
+            "1. **硬核事实 (Core Facts)**：记录用户的具体经历、职业、地理位置、提到的专有名词、重要的日期。 \n"
+            "2. **交互坐标 (Interaction State)**：记录当前对话的背景。例如：正在进行的扮演游戏（包括角色设定）、Bot 的特殊回复规则、长期讨论的特定项目。\n"
+            "3. **偏好与忌讳 (Preferences)**：记录用户对特定话题的明确态度。 \n"
+            "4. **剔除冗余**：不记录“用户互动积极”、“聊天愉快”等感悟类评价。 \n\n"
+            "### 格式要求 (Formatting):\n"
+            "- **高度压缩**：使用陈述句。如果新信息有冲突，以新信息为准。\n"
+            "- **字数控制**：生成的摘要全长必须控制在 **500个字符** 以内，确保信息的“黄金密度”。\n"
+            "- **语言**：必须使用中文。输出纯文本，谢绝 Markdown。"
         )
 
         user_prompt = f"Old Summary:\n{old_summary}\n\nNew Interaction:\n{new_content}"
