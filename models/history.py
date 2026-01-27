@@ -5,8 +5,7 @@ from models.base import Base
 
 class History(Base):
     """
-    对话历史表
-    用于构建滚动上下文 (Context Window)
+    历史记录表
     """
     __tablename__ = "history"
 
@@ -19,7 +18,7 @@ class History(Base):
     content: Mapped[str] = mapped_column(Text)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
-    # 复合索引优化查询：按 chat_id 和 timestamp 倒序查找
+    # 复合索引
     __table_args__ = (
         Index('idx_chat_timestamp', 'chat_id', 'timestamp'),
     )

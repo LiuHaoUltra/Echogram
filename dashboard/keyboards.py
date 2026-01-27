@@ -45,22 +45,26 @@ def get_access_control_keyboard() -> InlineKeyboardMarkup:
 
 def get_memory_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton("🧱 设置 Token 上限", callback_data="set_history_tokens")],
-        [InlineKeyboardButton("👁️ 预览当前提示词", callback_data="preview_sys_prompt")],
-        [InlineKeyboardButton("⚠️ 恢复出厂设置 (慎点)", callback_data="factory_reset_request")],
+        [InlineKeyboardButton("🔢 设置历史 Token 上限", callback_data="set_history_tokens")],
+        [InlineKeyboardButton("🚨 恢复出厂设置 (Danger)", callback_data="factory_reset_request")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_alphabet_keyboard() -> InlineKeyboardMarkup:
+def get_alphabet_keyboard(target: str = "main") -> InlineKeyboardMarkup:
     """
-    第一级：字母索引 A-Z
-    Callback: model_idx:{char}
+    一级：字母索引
     """
     import string
     chars = string.ascii_uppercase
     
     keyboard = []
+    
+    
+    # 摘要模式显示跳过
+    if target == "summary":
+        keyboard.append([InlineKeyboardButton("⏭️ 使用主模型 (默认)", callback_data="skip_summary_model")])
+        
     row = []
     for char in chars:
         row.append(InlineKeyboardButton(char, callback_data=f"model_idx:{char}"))
@@ -81,8 +85,7 @@ def get_alphabet_keyboard() -> InlineKeyboardMarkup:
 
 def get_provider_list_keyboard(providers: list[str]) -> InlineKeyboardMarkup:
     """
-    第二级：厂商列表
-    Callback: model_prov:{provider}
+    二级：厂商列表
     """
     keyboard = []
     for prov in providers:
@@ -92,10 +95,9 @@ def get_provider_list_keyboard(providers: list[str]) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton("⬅️ 返回索引", callback_data="model_idx_back")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_model_selection_keyboard_v2(models: list[str], page: int = 0, items_per_page: int = 10) -> InlineKeyboardMarkup:
+def get_model_selection_keyboard_v2(models: list[str], page: int = 0, items_per_page: int = 10, back_callback: str = "model_prov_back") -> InlineKeyboardMarkup:
     """
-    第三级：特定厂商下的模型列表 (支持分页)
-    Callback: model_sel:{full_model_name}
+    三级：模型列表 (分页)
     """
     total_models = len(models)
     start_idx = page * items_per_page
@@ -106,19 +108,12 @@ def get_model_selection_keyboard_v2(models: list[str], page: int = 0, items_per_
     keyboard = []
     
     for model_id in current_page_models:
-        # 此时 model_id 已经是 provider/name 格式
-        # 我们可以只显示 / 后面部分，节省空间
+        # 精简显示名称
         display_name = model_id.split('/')[-1] if '/' in model_id else model_id
         if len(display_name) > 30:
             display_name = display_name[:28] + ".."
             
-        # 注意：这里 callback data 依然需要 full model name
-        # 如果 model_id 太长 > 50 chars, telegram 可能会报错
-        # 现在的 callback_data 格式: "model_sel:" (10 chars) + model_id
-        # 如果 model_id > 54 chars 就会炸
-        # 我们这里做一个截断保护/Hash映射太复杂，先假设大部分模型名没这么长
-        # 或者仅仅依靠 model suffix? 不行，可能有冲突
-        # 暂时相信 Provider 下的模型名可控
+        # 避免模型名过长导致 Callback 溢出 (暂未处理)
         
         keyboard.append([InlineKeyboardButton(f"🤖 {display_name}", callback_data=f"model_sel:{model_id}")])
     
@@ -136,6 +131,10 @@ def get_model_selection_keyboard_v2(models: list[str], page: int = 0, items_per_
     if nav_buttons:
         keyboard.append(nav_buttons)
         
-    keyboard.append([InlineKeyboardButton("⬅️ 返回厂商", callback_data="model_prov_back")])
+    keyboard.append([InlineKeyboardButton("⬅️ 返回", callback_data=back_callback)])
     
     return InlineKeyboardMarkup(keyboard)
+
+def get_cancel_keyboard() -> InlineKeyboardMarkup:
+    """通用取消按钮"""
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 取消 (Cancel)", callback_data="cancel_input")]])

@@ -6,7 +6,6 @@ from models.base import Base
 class Whitelist(Base):
     """
     白名单表
-    控制哪些用户或群组可以触发 Bot
     """
     __tablename__ = "whitelist"
 

@@ -4,10 +4,12 @@ from config.database import get_db_session
 from models.history import History
 
 class HistoryService:
-    _encoding = None # Class-level cache
-
+    _encoding = None
+    
+    # Class-level cache applied
     def __init__(self):
-        # 单例化 Encoding
+        # Encoding 单例
+
         if HistoryService._encoding is None:
             HistoryService._encoding = tiktoken.get_encoding("cl100k_base")
 
@@ -22,7 +24,7 @@ class HistoryService:
             await session.commit()
 
     async def factory_reset(self):
-        """[Dangerous] 清空所有历史记录"""
+        """清空所有历史记录"""
         async for session in get_db_session():
             await session.execute(delete(History))
             await session.commit()
@@ -46,8 +48,7 @@ class HistoryService:
         [核心逻辑] 获取历史，直到填满 target_tokens
         """
         async for session in get_db_session():
-            # 1. 预取最近 200 条 (倒序: New -> Old)
-            # 200条 * 50 tokens = 10000 tokens，足够覆盖大多数窗口
+            # 预取最近 200 条
             stmt = select(History).where(History.chat_id == chat_id)\
                 .order_by(History.timestamp.desc()).limit(200)
             result = await session.execute(stmt)
@@ -56,9 +57,9 @@ class HistoryService:
             selected = []
             current_tokens = 0
 
-            # 2. 贪婪填充
+            # 贪婪填充
             for msg in candidates:
-                # 估算每条消息开销 (Role等) 约 4 tokens
+                # 估算开销
                 cost = self.count_tokens(msg.content) + 4
                 
                 if current_tokens + cost > target_tokens:
@@ -67,7 +68,7 @@ class HistoryService:
                 selected.append(msg)
                 current_tokens += cost
 
-            # 3. 反转回正序 (Old -> New)
+            # 恢复时间顺序
             return list(reversed(selected))
 
     async def calculate_context_usage(self, chat_id: int, target_tokens: int) -> int:

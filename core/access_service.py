@@ -7,11 +7,16 @@ class AccessService:
     @staticmethod
     async def add_whitelist(chat_id: int, type_: str, description: str = None):
         async for session in get_db_session():
+            # 使用 UPSERT 逻辑，如果已存在则更新描述
             stmt = insert(Whitelist).values(
                 chat_id=chat_id, 
                 type=type_, 
                 description=description
-            ).on_conflict_do_nothing()
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['chat_id'],
+                set_=dict(description=description, type=type_)
+            )
             await session.execute(stmt)
             await session.commit()
 

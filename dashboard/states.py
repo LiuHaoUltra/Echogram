@@ -6,20 +6,18 @@
     WAITING_INPUT_SYSTEM_PROMPT,
     WAITING_INPUT_WHITELIST_ADD,
     WAITING_INPUT_WHITELIST_REMOVE,
-    # New Wizard States
+    # Wizard 状态
     WIZARD_INPUT_URL,
     WIZARD_INPUT_KEY,
     WIZARD_INPUT_MODEL,
     WIZARD_INPUT_TIMEZONE,
-    # Search
+    # 搜索
     WAITING_INPUT_MODEL_SEARCH,
-    # Aggregation
+    # 聚合
     WAITING_INPUT_AGGREGATION_LATENCY,
-    # Context
-    # REMOVED: WAITING_INPUT_CONTEXT_LIMIT
-    # Summary Model
+    # 摘要模型
     WAITING_INPUT_SUMMARY_MODEL,
     WIZARD_INPUT_SUMMARY_MODEL,
-    # Context Tokens
+    # Token 上限
     WAITING_INPUT_HISTORY_TOKENS
 ) = range(15)

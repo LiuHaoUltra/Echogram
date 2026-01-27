@@ -5,10 +5,8 @@ import json
 
 async def fetch_available_models():
     """
-    尝试从配置的 API 获取模型列表
-    返回: (success: bool, data: list[str] | str)
-    - 成功返回模型 ID 列表
-    - 失败返回错误信息字符串
+    获模型列表
+    返回: (success, model_ids)
     """
     configs = await config_service.get_all_settings()
     api_key = configs.get("api_key")
@@ -19,10 +17,10 @@ async def fetch_available_models():
 
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        # 设置较短超时，避免卡住界面
+        # 10s 超时防止阻塞
         models_page = await client.models.list(timeout=10.0)
         
-        # 提取模型 ID 并排序
+        # 排序模型 ID
         model_ids = sorted([m.id for m in models_page.data])
         return True, model_ids
         
@@ -32,7 +30,7 @@ async def fetch_available_models():
 
 async def simple_chat(model: str, messages: list, temperature: float = 0.7) -> str:
     """
-    通用 LLM 调用接口 (用于后台任务如总结)
+    通用 LLM 调用接口
     """
     configs = await config_service.get_all_settings()
     api_key = configs.get("api_key")

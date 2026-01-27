@@ -5,19 +5,17 @@ from models.base import Base
 
 class ConversationSummary(Base):
     """
-    对话摘要表 (Episodic Summary)
-    属于 "中期记忆"，由后台服务定期生成。
+    对话摘要 (Mid-term)
     """
     __tablename__ = "conversation_summaries"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
     
-    # 摘要内容 (包含 Facts, Narrative, Mood)
+    # 摘要内容
     summary: Mapped[str] = mapped_column(Text)
     
-    # 该摘要覆盖的消息范围 (History.id)
-    # 用于避免重复总结
+    # 覆盖消息范围
     start_msg_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
     end_msg_id: Mapped[int] = mapped_column(BigInteger, nullable=True)
     
@@ -32,14 +30,13 @@ class ConversationSummary(Base):
 
 class UserSummary(Base):
     """
-    用户长期记忆摘要表 (User Summary)
-    存储动态生成的 Long-term Memory Summary
+    用户画像 (Long-term)
     """
     __tablename__ = "user_summaries"
     
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     content: Mapped[str] = mapped_column(Text, default="")  # 摘要文本
-    last_summarized_msg_id: Mapped[int] = mapped_column(BigInteger, default=0) # 进度指针 (上次总结到的 Message ID)
+    last_summarized_msg_id: Mapped[int] = mapped_column(BigInteger, default=0) # 进度指针
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     def __repr__(self):

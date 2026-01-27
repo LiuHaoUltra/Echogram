@@ -5,20 +5,20 @@ from utils.logger import logger
 
 async def post_init(application: Application):
     """
-    Bot 启动后的初始化操作
+    Bot 初始化
     1. 初始化数据库
-    2. 设置 Bot 指令菜单 (后续添加)
+    2. 后续可添加指令菜单设置
     """
     logger.info("Initializing database...")
     await init_db()
     logger.info("Database initialized successfully.")
     
-    # 获取 Bot 信息确认连接成功
+    # 确认连接
     bot_info = await application.bot.get_me()
     logger.info(f"Bot connected: @{bot_info.username} (ID: {bot_info.id})")
 
 def run_bot():
-    """构造并运行 Bot"""
+    """启动 Bot"""
     try:
         settings.validate()
     except ValueError as e:
@@ -35,24 +35,32 @@ def run_bot():
         .build()
 
     # ---------------------------------------------------------
-    # 注册 Handlers
     # ---------------------------------------------------------
-    # 1. Dashboard Handlers (Priority: High)
+    # 注册处理器
+    # ---------------------------------------------------------
+    # Dashboard 处理器 (高优先级)
     from dashboard.router import get_dashboard_handlers
     application.add_handlers(get_dashboard_handlers())
     
-    # 1.5 Admin Handlers
-    from core.admin_handlers import reset_command, stats_command
+    # Admin 处理器
+    from core.admin_handlers import (
+        reset_command, stats_command, prompt_command, 
+        debug_command, add_whitelist_command, remove_whitelist_command
+    )
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("prompt", prompt_command))
+    application.add_handler(CommandHandler("debug", debug_command))
+    application.add_handler(CommandHandler("add_whitelist", add_whitelist_command))
+    application.add_handler(CommandHandler("remove_whitelist", remove_whitelist_command))
     
-    # 2. Chat Engine Handlers (Priority: Low, catch-all)
+    # 聊天引擎处理器 (低优先级)
     from telegram.ext import MessageHandler, filters
     from core.chat_engine import process_message_entry
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
     
-    # 3. Reaction Handlers
+    # 回应处理器
     from telegram.ext import MessageReactionHandler
     from core.chat_engine import process_reaction_update
     application.add_handler(MessageReactionHandler(process_reaction_update))
@@ -60,8 +68,8 @@ def run_bot():
     # ---------------------------------------------------------
 
     logger.info("Starting polling...")
-    # 显式允许 message_reaction 更新
-    # Update.ALL_TYPES sometimes doesn't work as expected for new updates
+    # 允许回应更新
+    # 显式指定类型以确保兼容性
     application.run_polling(allowed_updates=[
         "message", "edited_message", "channel_post", "edited_channel_post",
         "inline_query", "chosen_inline_result", "callback_query",

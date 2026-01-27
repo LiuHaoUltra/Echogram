@@ -1,7 +1,7 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from core.config_service import config_service
-from dashboard.states import WIZARD_INPUT_URL, WIZARD_INPUT_KEY, WIZARD_INPUT_MODEL, WIZARD_INPUT_TIMEZONE, WIZARD_INPUT_SUMMARY_MODEL
+from dashboard.states import WIZARD_INPUT_URL, WIZARD_INPUT_KEY, WIZARD_INPUT_MODEL, WIZARD_INPUT_TIMEZONE, WIZARD_INPUT_SUMMARY_MODEL, WAITING_INPUT_MODEL_SEARCH, WAITING_INPUT_MODEL_NAME
 from dashboard.keyboards import get_main_menu_keyboard
 
 # --- Keyboards ---
@@ -24,10 +24,9 @@ def get_timezone_keyboard():
 
 # --- Handlers ---
 
-# 1. Step 1: Timezone (Entry)
+# Step 1: 时区
 async def start_wizard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """进入向导：第一步设置时区"""
-    """进入向导：第一步设置时区"""
+    """向导入口: 时区"""
     query = update.callback_query
     
     # 鉴权
@@ -39,7 +38,7 @@ async def start_wizard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     msg = (
-        "<b>🚀系统初始化向导 (1/4)</b>\n\n"
+        "<b>🚀系统初始化向导 (1/5)</b>\n\n"
         "首先，请设置您的 **时区** (用于显示正确的时间)。\n"
         "推荐: <code>Asia/Shanghai</code>\n"
         "您可以直接点击下方按钮使用北京时间，或手动输入 (如 `Europe/London`)。"
@@ -48,7 +47,7 @@ async def start_wizard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return WIZARD_INPUT_TIMEZONE
 
 async def wizard_save_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """保存时区并进入下一步 (URL)"""
+    """保存时区"""
     text = update.message.text.strip()
     import pytz
     if text not in pytz.all_timezones:
@@ -73,10 +72,10 @@ async def wizard_use_utc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ 已设置时区: UTC")
     return await _ask_url(update, context)
 
-# 2. Step 2: URL
+# Step 2: URL
 async def _ask_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "<b>🚀系统初始化向导 (2/4)</b>\n\n"
+        "<b>🚀系统初始化向导 (2/5)</b>\n\n"
         "接下来，配置 LLM API 的接口地址。\n"
         "如果你使用 OpenRouter，请直接点击“使用默认”。\n\n"
         "请输入 <b>Base URL</b>:"
@@ -92,6 +91,10 @@ async def _ask_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def wizard_save_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    if not text.startswith("http"):
+        await update.message.reply_text("❌ 无效的 URL。必须以 `http` 或 `https` 开头。")
+        return WIZARD_INPUT_URL
+        
     await config_service.set_value("api_base_url", text)
     await update.message.reply_text("✅ Base URL 已保存。")
     return await _ask_api_key(update, context)
@@ -110,10 +113,10 @@ async def wizard_skip_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⏭️ 已跳过 URL 配置。")
     return await _ask_api_key(update, context)
 
-# 3. Step 3: API Key
+# Step 3: API Key
 async def _ask_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "<b>🚀系统初始化向导 (3/4)</b>\n\n"
+        "<b>🚀系统初始化向导 (3/5)</b>\n\n"
         "请输入你的 <b>API Key</b>。\n"
         "<i>(输入后消息将立即销毁消息以保护隐私)</i>"
     )
@@ -128,6 +131,10 @@ async def _ask_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def wizard_save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    if len(text) < 8:
+        await update.message.reply_text("❌ API Key 太短，请检查。")
+        return WIZARD_INPUT_KEY
+
     try:
         await update.message.delete()
     except:
@@ -138,28 +145,30 @@ async def wizard_save_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return await _ask_model(update, context)
 
-# 4. Step 4: Model
+# Step 4: Main Model
 from dashboard.model_handlers import show_model_selection_panel
 
 async def _ask_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
-        "<b>🚀系统初始化向导 (4/4)</b>\n\n"
+        "<b>🚀系统初始化向导 (4/5)</b>\n\n"
         "最后，请选择或输入要使用的模型名称 (Model Name)。"
     )
-    # 提示用户，并调用面板
-    # 由于 show_model_selection_panel 是独立的，我们在这里通过消息告诉用户可以操作了
-    # 但为了更好的体验，我们直接调用 show_panel
+    # 提示用户并展示面板
     await update.message.reply_text(msg, parse_mode="HTML")
     await show_model_selection_panel(update, context)
     return WIZARD_INPUT_MODEL
 
 async def wizard_save_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    if len(text) < 2:
+        await update.message.reply_text("❌ 模型名称太短。")
+        return WIZARD_INPUT_MODEL
+
     await config_service.set_value("model_name", text)
     
     return await _ask_summary_model(update, context)
 
-# 5. Step 5: Summary Model (New)
+# Step 5: Summary Model
 async def _ask_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "<b>🚀系统初始化向导 (5/5)</b>\n\n"
@@ -167,9 +176,12 @@ async def _ask_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "建议使用更便宜、速度更快的模型 (如 `gpt-4o-mini`) 来处理后台摘要任务，以节省成本。\n"
         "如果不设置，将默认使用主模型。"
     )
-    # 添加一个明显的跳过按钮
-    keyboard = [[InlineKeyboardButton("⏭️ 使用主模型 (默认)", callback_data="skip_summary_model")]]
-    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
+
+    # 直接展示面板
+    await show_model_selection_panel(update, context, target="summary", header_text=msg)
+    return WIZARD_INPUT_SUMMARY_MODEL
     
     # 使用面板，设置 target='summary'
     # 注意：wizard 状态机需要能够处理从面板返回的回调
@@ -191,12 +203,16 @@ async def _ask_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 提供两个按钮："使用主模型(跳过)" 和 "手动输入/选择"？
     # 为了复用面板，我们可以在 wizard_handlers 里写一个 wrapper。
     
-    await show_model_selection_panel(update, context, target="summary")
+
     return WIZARD_INPUT_SUMMARY_MODEL
 
 async def wizard_save_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 手动输入的情况
+    # 手动输入
     text = update.message.text.strip()
+    if len(text) < 2: 
+         await update.message.reply_text("❌ 模型名称太短。")
+         return WIZARD_INPUT_SUMMARY_MODEL
+
     if text.lower() not in ["skip", "跳过"]:
         await config_service.set_value("summary_model_name", text)
     
@@ -210,19 +226,44 @@ async def wizard_skip_summary_model(update: Update, context: ContextTypes.DEFAUL
     return await _finalize_wizard(update, context)
 
 from dashboard.model_handlers import handle_model_callback
+from dashboard.keyboards import get_main_menu_keyboard # Re-import locally if needed or rely on top level
+
+async def wizard_main_model_callback_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Step 4 回调 Wrapper
+    """
+    res = await handle_model_callback(update, context)
+    
+    # 模型选择完成，进入 Step 5
+    if res == ConversationHandler.END:
+         return await _ask_summary_model(update, context)
+    
+    # 保持搜索状态
+    if res in [WAITING_INPUT_MODEL_SEARCH, WAITING_INPUT_MODEL_NAME]:
+        return res
+
+    return WIZARD_INPUT_MODEL
 
 async def wizard_model_callback_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Wrapper to handle model selection within Wizard.
-    If handle_model_callback returns END, we proceed to finalize wizard.
-    Otherwise we stay in WIZARD_INPUT_SUMMARY_MODEL.
+    Wizard 模型回调 Wrapper
     """
+    # 显式处理跳过
+    query = update.callback_query
+    if query.data == "skip_summary_model":
+        return await wizard_skip_summary_model(update, context)
+
     res = await handle_model_callback(update, context)
     if res == ConversationHandler.END:
         return await _finalize_wizard(update, context)
+        
+    # [Fix] Propagate search state if returned
+    if res in [WAITING_INPUT_MODEL_SEARCH, WAITING_INPUT_MODEL_NAME]:
+        return res
+        
     return WIZARD_INPUT_SUMMARY_MODEL
 
-# Finalize
+# 结束向导
 async def _finalize_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     effective_message = update.callback_query.message if update.callback_query else update.message
     
@@ -239,3 +280,25 @@ async def _finalize_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
     return ConversationHandler.END
+
+async def wizard_search_callback_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    搜索 Wrapper
+    """
+    # 提前捕获目标
+    target = context.user_data.get('model_selection_target', 'main')
+    
+    res = await handle_model_callback(update, context)
+    
+    # 保持搜索状态
+    if res in [WAITING_INPUT_MODEL_SEARCH, WAITING_INPUT_MODEL_NAME]:
+        return res
+        
+    if res == ConversationHandler.END:
+        if target == 'summary':
+            return await _finalize_wizard(update, context)
+        else:
+            # 默认流程
+            return await _ask_summary_model(update, context)
+            
+    return WAITING_INPUT_MODEL_SEARCH

@@ -10,20 +10,15 @@ import json
 
 class MemoryService:
     """
-    长期记忆服务 (旁路书记员)
-    负责异步总结对话，生成 "Episodic Summaries"
+    长期记忆服务
     """
     
-    # 触发阈值：积累多少条未覆盖的消息后触发总结
+    # 总结触发阈值
     SUMMARY_THRESHOLD = 20 
     
     @staticmethod
     async def get_latest_summary(chat_id: int) -> str:
-        """
-        获取最新的摘要文本
-        目前策略：只取最后一条 Summary。
-        未来策略：可以取最近 N 条，或做 Summary of Summaries。
-        """
+        """获取最新摘要"""
         async for session in get_db_session():
             stmt = select(ConversationSummary.summary)\
                 .where(ConversationSummary.chat_id == chat_id)\
@@ -35,7 +30,7 @@ class MemoryService:
 
     @staticmethod
     async def get_latest_summary_time(chat_id: int) -> str:
-        """获取最新摘要生成时间 (Format: YYYY-MM-DD HH:MM)"""
+        """获取最新摘要时间"""
         async for session in get_db_session():
             stmt = select(ConversationSummary.created_at)\
                 .where(ConversationSummary.chat_id == chat_id)\
@@ -47,7 +42,7 @@ class MemoryService:
             if not dt:
                 return "N/A"
                 
-            # 获取配置时区
+            # 获取时区
             import pytz
             tz_str = await config_service.get_value("timezone", "UTC")
             try:
@@ -55,8 +50,7 @@ class MemoryService:
             except:
                 tz = pytz.UTC
             
-            # 假设 DB 存的是 UTC (Naive Datetime usually treated as UTC in our context if stored by datetime.utcnow)
-            # SQLAlchemy DateTime is usually naive. Best practice is to assume UTC if naive.
+            # 统一转换为 UTC
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=pytz.UTC)
                 
@@ -66,15 +60,11 @@ class MemoryService:
     @staticmethod
     async def check_and_summarize(chat_id: int):
         """
-        检查是否满足总结条件，若满足则生成并存储摘要。
-        这是个 Fire-and-Forget func，不应阻塞主流程。
+        检查并生成摘要
         """
         try:
             async for session in get_db_session():
-                # 1. 找到最后一条被 Summary 覆盖的 message_id (History.id, not msg_id)
-                # 我们假设 Summary.end_msg_id 存的是 History 表的主键 ID 比较方便连续性查询，
-                # 但 History.id 是自增的，History.message_id 是 Telegram 的。
-                # 由于 History 表 id 也是自增且与顺序一致，用 History.id 更靠谱。
+                # 1. 获取最后的摘要尾 ID
                 
                 last_summary = await session.execute(
                     select(ConversationSummary)
@@ -88,7 +78,7 @@ class MemoryService:
                 if last_summary and last_summary.end_msg_id:
                     last_covered_id = last_summary.end_msg_id
                     
-                # 2. 查询未覆盖的消息数量
+                # 2. 统计未覆盖消息
                 stmt = select(func.count()).select_from(History).where(
                     History.chat_id == chat_id,
                     History.id > last_covered_id
@@ -96,9 +86,9 @@ class MemoryService:
                 count = (await session.execute(stmt)).scalar()
                 
                 if count < MemoryService.SUMMARY_THRESHOLD:
-                    return # 不够，攒着
+                    return # 数量不足，跳过
                     
-                # 3. 拉取未覆盖的消息
+                # 3. 获取新消息
                 msgs_stmt = select(History).where(
                     History.chat_id == chat_id,
                     History.id > last_covered_id
@@ -108,14 +98,14 @@ class MemoryService:
                 if not msgs:
                     return
 
-                # 4. 生成摘要
+                # 4. LLM 生成
                 summary_text = await MemoryService._generate_summary(msgs, last_summary.summary if last_summary else None)
                 
                 if not summary_text:
                     logger.warning(f"Summarization returned empty for chat {chat_id}")
                     return
 
-                # 5. 存入数据库
+                # 5. 保存摘要
                 new_summary = ConversationSummary(
                     chat_id=chat_id,
                     summary=summary_text,
@@ -138,16 +128,16 @@ class MemoryService:
         configs = await config_service.get_all_settings()
         api_key = configs.get("api_key")
         base_url = configs.get("api_base_url")
-        # 优先使用 summary_model_name
+        # 优先使用专用模型
         main_model = configs.get("model_name", "gpt-3.5-turbo")
         summary_model = configs.get("summary_model_name")
         
-        # 如果未设置或设置为空字符串，则回退跟随主模型
+        # 降级为主模型
         model = summary_model if summary_model and summary_model.strip() else main_model
         
         if not api_key: return None
 
-        # 格式化对话文本
+        # 格式化文本
         conversation_text = ""
         for m in messages:
             role = "User" if m.role == 'user' else "AI"

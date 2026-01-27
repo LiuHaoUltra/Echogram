@@ -7,13 +7,13 @@ from dashboard import model_handlers
 from dashboard.states import *
 
 def get_dashboard_handlers():
+
     """
     Dashboard 路由集合
-    包含一个主 ConversationHandler 处理按键触发的输入状态
     """
     
-    # 匹配所有可能的“进入输入模式”的按钮 callback_data regex
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens)$"
+    # 匹配入口按钮
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -23,7 +23,7 @@ def get_dashboard_handlers():
             WAITING_INPUT_API_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_api_url)],
             WAITING_INPUT_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_api_key)],
             WAITING_INPUT_AGGREGATION_LATENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_aggregation_latency)],
-            # 模型选择: 支持文字输入，也支持回调 (翻页/选择)
+            # 模型选择
             WAITING_INPUT_MODEL_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_model_name),
                 CallbackQueryHandler(model_handlers.handle_model_callback)
@@ -33,7 +33,7 @@ def get_dashboard_handlers():
                  MessageHandler(filters.TEXT & ~filters.COMMAND, model_handlers.perform_model_search),
                  CallbackQueryHandler(model_handlers.handle_model_callback) # Allow cancel/back
             ],
-            # [NEW] 摘要模型设置
+            # 摘要模型设置
             WAITING_INPUT_SUMMARY_MODEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_summary_model),
                 CallbackQueryHandler(model_handlers.handle_model_callback)
@@ -50,7 +50,7 @@ def get_dashboard_handlers():
         allow_reentry=True
     )
 
-    # 这里的 Wizard 是独立的 Conversation
+    # Wizard 独立对话
     wizard_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(wizard_handlers.start_wizard_entry, pattern="^start_setup_wizard$")],
         states={
@@ -61,12 +61,12 @@ def get_dashboard_handlers():
             ],
             WIZARD_INPUT_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_key)],
             
-            # Wizard 中的模型选择
+            # Wizard 模型选择
             WIZARD_INPUT_MODEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_model),
-                CallbackQueryHandler(model_handlers.handle_model_callback)
+                CallbackQueryHandler(wizard_handlers.wizard_main_model_callback_wrapper)
             ],
-            # [NEW] Wizard 摘要模型
+            # Wizard 摘要模型
             WIZARD_INPUT_SUMMARY_MODEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_summary_model),
                 CallbackQueryHandler(wizard_handlers.wizard_skip_summary_model, pattern="^skip_summary_model$"),
@@ -78,6 +78,13 @@ def get_dashboard_handlers():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_timezone),
                 CallbackQueryHandler(wizard_handlers.wizard_use_shanghai, pattern="^tz_shanghai$"),
                 CallbackQueryHandler(wizard_handlers.wizard_use_utc, pattern="^tz_utc$")
+            ],
+            
+            # Wizard 模型搜索
+            WAITING_INPUT_MODEL_SEARCH: [
+                 MessageHandler(filters.TEXT & ~filters.COMMAND, model_handlers.perform_model_search),
+                 # Important: Use wizard wrapper to handle selection/navigation back
+                 CallbackQueryHandler(wizard_handlers.wizard_search_callback_wrapper)
             ]
         },
         fallbacks=[CommandHandler("start", start_command)],
@@ -90,5 +97,5 @@ def get_dashboard_handlers():
         CommandHandler("start", start_command),
         CommandHandler("dashboard", dashboard_command),
         CommandHandler("id", id_command),
-        CallbackQueryHandler(menu_navigation_callback) # 处理其他非输入类的点击（如菜单跳转）
+        CallbackQueryHandler(menu_navigation_callback) # 处理其他通用点击
     ]

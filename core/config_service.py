@@ -5,7 +5,7 @@ from models.config import Config
 
 class ConfigService:
     """
-    提供对 Config 表的增删改查服务
+    Config 表 CRUD 服务
     """
     
     @staticmethod
@@ -21,7 +21,7 @@ class ConfigService:
         """设置配置值 (Upsert)"""
         async for session in get_db_session():
             stmt = insert(Config).values(key=key, value=value)
-            # SQLite 的 Upsert 语法
+            # SQLite Upsert
             stmt = stmt.on_conflict_do_update(
                 index_elements=['key'],
                 set_={'value': value}

@@ -2,6 +2,7 @@ from telegram import Update, constants, InlineKeyboardButton, InlineKeyboardMark
 from telegram.ext import ContextTypes
 from core.secure import is_admin
 from core.config_service import config_service
+from config.settings import settings
 from dashboard.keyboards import get_main_menu_keyboard
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -21,8 +22,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 陌生人私聊 /start -> 静默
         return
         
-    # 2. 检查是否需要初始化
-    # 只要没有 API Key，就认为需要初始化
+    # 检查初始化
     api_key = await config_service.get_value("api_key")
     
     if not api_key:
@@ -59,15 +59,17 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
     else:
         if len(summary_model) > 30: summary_model = summary_model[:27] + "..."
         summary_model_disp = f"<code>{summary_model}</code>"
-        
+
+    latency = configs.get("aggregation_latency", "10.0")
+
     return (
-        "<b>Echogram 控制中心 (Global Config)</b>\n\n"
+        "<b>Echogram 控制中心</b>\n\n"
         "📊 <b>系统参数</b>\n"
         f"• Base URL: <code>{base_url}</code>\n"
         f"• Main Model: <code>{model}</code>\n"
         f"• Summary Model: {summary_model_disp}\n"
         f"• Aggregation Latency: <code>{latency} s</code>\n"
-        f"• Token Limit: <code>{settings.HISTORY_WINDOW_TOKENS} tokens</code>\n\n"
+        f"• Token Limit: <code>{configs.get('history_tokens', str(settings.HISTORY_WINDOW_TOKENS))} tokens</code>\n\n"
         "请选择配置项："
     )
 
@@ -93,10 +95,11 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     获取当前 Chat ID (方便添加白名单)
     """
+    user = update.effective_user
     chat = update.effective_chat
     
-    # 鉴权
-    if not is_admin(update.effective_user.id):
+    # 鉴权：非管理员完全静默
+    if not is_admin(user.id):
         return
         
     await update.message.reply_text(

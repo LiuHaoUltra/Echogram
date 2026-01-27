@@ -4,8 +4,7 @@ from models.base import Base
 
 class Config(Base):
     """
-    配置存储表 (Key-Value)
-    用于存储 API Key, Model Name, System Prompt 等需动态修改的配置
+    配置表 (KV)
     """
     __tablename__ = "config"
 

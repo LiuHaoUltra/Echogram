@@ -10,7 +10,8 @@ from dashboard.keyboards import (
     get_api_settings_keyboard,
     get_persona_keyboard,
     get_access_control_keyboard,
-    get_memory_keyboard
+    get_memory_keyboard,
+    get_cancel_keyboard
 )
 from dashboard.states import (
     WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME,
@@ -22,10 +23,10 @@ from dashboard.model_handlers import show_model_selection_panel
 async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     
-    # 鉴权: 即使有人转发了面板，非管理员点击也应无效/静默
+    # 鉴权: 防转发
     from core.secure import is_admin
     if not is_admin(update.effective_user.id):
-        await query.answer("Access Denied", show_alert=True) # 或者完全静默，但 callback 最好 answer 一下防止转圈
+        await query.answer("Access Denied", show_alert=True)
         return ConversationHandler.END
 
     await query.answer()
@@ -37,7 +38,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     if data == "menu_main" or data == "cancel_input":
-        # Avoid circular import by importing inside function or ensure structure allows it
+        # 防止循环导入
         from dashboard.handlers import get_dashboard_overview_text
         overview_text = await get_dashboard_overview_text(update.effective_chat.id)
         
@@ -54,14 +55,15 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
     
     if data == "set_api_url":
-        await query.edit_message_text(text="请输入新的 <b>Base URL</b>:", parse_mode="HTML")
+        await query.edit_message_text(text="请输入新的 <b>Base URL</b>:", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_API_URL
     if data == "set_api_key":
-        await query.edit_message_text(text="请输入新的 <b>API Key</b>:", parse_mode="HTML")
+        await query.edit_message_text(text="请输入新的 <b>API Key</b>:", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_API_KEY
     if data == "set_model_name":
         # 即使是 Dashboard 修改，也展示面板
-        # target='main' is default, but explicit is better
         await show_model_selection_panel(update, context, target="main")
         return WAITING_INPUT_MODEL_NAME
         
@@ -77,8 +79,10 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         current_val = await config_service.get_value("aggregation_latency", "10")
         await query.edit_message_text(
             text=f"请输入新的 <b>聚合延迟 (秒)</b>:\n当前值: {current_val} s\n(建议 3-10 秒)", 
+            reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_AGGREGATION_LATENCY
 
     # --- 2. 人格菜单 ---
@@ -93,7 +97,8 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     if data == "set_sys_prompt":
-        await query.edit_message_text(text="请输入新的 <b>System Prompt</b>:", parse_mode="HTML")
+        await query.edit_message_text(text="请输入新的 <b>System Prompt</b>:", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_SYSTEM_PROMPT
 
     # --- 3. 访问控制 ---
@@ -108,40 +113,45 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
             text += "暂无数据"
         else:
             for item in items:
-                text += f"• <code>{item.chat_id}</code> ({item.type})\n"
-        # 列表太长可能需要分页，暂且直接显示
-        # 注意：这里我们覆盖了原文，提供了返回按钮
+                name_disp = f" ({item.description})" if item.description else ""
+                text += f"• <code>{item.chat_id}</code>{name_disp} [{item.type}]\n"
+        # 暂无分页，直接显示
         await query.edit_message_text(text=text, reply_markup=get_access_control_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
 
     if data == "add_whitelist_id":
-        await query.edit_message_text(text="请输入要添加的 <b>Chat ID</b>:", parse_mode="HTML")
+        await query.edit_message_text(text="请输入要添加的 <b>Chat ID</b>:", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_WHITELIST_ADD
     
     if data == "remove_whitelist_id":
-        await query.edit_message_text(text="请输入要移除的 <b>Chat ID</b>:", parse_mode="HTML")
+        await query.edit_message_text(text="请输入要移除的 <b>Chat ID</b>:", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_WHITELIST_REMOVE
 
     # --- 4. 记忆管理 ---
     if data == "menu_memory":
-        await query.edit_message_text(text="<b>🧹 记忆管理</b>", reply_markup=get_memory_keyboard(), parse_mode="HTML")
+        try:
+            await query.edit_message_text(text="<b>🧹 记忆管理</b>", reply_markup=get_memory_keyboard(), parse_mode="HTML")
+        except Exception as e:
+            if "Message is not modified" not in str(e):
+                raise e
         return ConversationHandler.END
-    
-    # Removed old text-based set_summary_model handler block from here since it is now handled above via panel
-
     
     
     if data == "set_history_tokens":
         from config.settings import settings
         current_val = await config_service.get_value("history_tokens", str(settings.HISTORY_WINDOW_TOKENS))
         await query.edit_message_text(
-            text=f"请输入新的 <b>历史记录 Token 上限</b>:\n当前值: {current_val}\n(默认: {settings.HISTORY_WINDOW_TOKENS}，建议 2000-16000)",
+            text=f"请输入新的 <b>历史记录 Token 上限</b>:\n当前值: {current_val}\n(范围: 300-100000，建议 2000-16000)",
+            reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )
+        context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_HISTORY_TOKENS
     
     if data == "factory_reset_request":
-        # 危险操作 Warning
+        # 危险操作警告
         keyboard = [
             [InlineKeyboardButton("🛑 确认清空所有数据 (不可恢复)", callback_data="factory_reset_confirm")],
             [InlineKeyboardButton("🔙 取消", callback_data="menu_memory")]
@@ -166,43 +176,6 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         )
         return ConversationHandler.END
 
-        return ConversationHandler.END
-
-    if data == "preview_sys_prompt":
-        import html
-        # 获取当前 Chat 的配置
-        chat_id = update.effective_chat.id
-        
-        # 1. 获取动态侧写 (Summary)
-        dynamic_summary = await summary_service.get_summary(chat_id)
-        
-        # 2. 获取自定义 System Prompt (Soul)
-        soul_prompt = await config_service.get_value("system_prompt")
-        
-        # 3. 获取时区
-        timezone = await config_service.get_value("timezone", "UTC")
-        
-        # 4. 组装完整 Prompt
-        full_prompt = prompt_builder.build_system_prompt(
-            soul_prompt=soul_prompt,
-            timezone=timezone,
-            dynamic_summary=dynamic_summary
-        )
-        
-        # 5. 显示 (使用 <pre> 保持格式)
-        # 由于 Prompt 可能很长，Telegram 消息限制 4096 字符。
-        # 如果超长，进行截断或分段。这里做简单处理。
-        # [Security] HTML Escape to prevent parse errors with tags like <chat>
-        safe_prompt = html.escape(full_prompt)
-        
-        if len(safe_prompt) > 4000:
-            safe_prompt = safe_prompt[:3900] + "\n\n... (Truncated)"
-            
-        await query.edit_message_text(
-            text=f"<b>👁️ 当前提示词预览 (System Prompt)</b>\n\n<pre>{safe_prompt}</pre>",
-            reply_markup=get_memory_keyboard(),
-            parse_mode="HTML"
-        )
         return ConversationHandler.END
 
     return ConversationHandler.END

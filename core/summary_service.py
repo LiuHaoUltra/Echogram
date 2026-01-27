@@ -15,7 +15,7 @@ from utils.logger import logger
 class SummaryService:
     def __init__(self):
         self._processing = set() # 正在处理的 chat_id
-        self._last_check = {}    # 上次检查时间: {chat_id: timestamp}
+        self._last_check = {}    # 上次检查时间戳
 
     async def get_summary(self, chat_id: int) -> str:
         """获取当前用户的长期摘要"""
@@ -25,30 +25,49 @@ class SummaryService:
             summary = result.scalar_one_or_none()
             return summary.content if summary else ""
 
+    async def get_status(self, chat_id: int):
+        """获取总结状态：最后总结的记录 ID 和 更新时间"""
+        async for session in get_db_session():
+            stmt = select(UserSummary).where(UserSummary.chat_id == chat_id)
+            result = await session.execute(stmt)
+            summary = result.scalar_one_or_none()
+            if summary:
+                logger.debug(f"Summary status found for {chat_id}: last_id={summary.last_summarized_msg_id}")
+                return {
+                    "last_id": summary.last_summarized_msg_id,
+                    "updated_at": summary.updated_at
+                }
+            logger.debug(f"Summary status NOT found for {chat_id}")
+            return {"last_id": 0, "updated_at": None}
+
     async def clear_summary(self, chat_id: int):
         """清空长期摘要"""
         async for session in get_db_session():
+            stmt = delete(UserSummary).where(UserSummary.chat_id == chat_id)
             await session.execute(stmt)
             await session.commit()
             logger.info(f"Summary cleared for {chat_id}")
 
     async def factory_reset(self):
-        """[Dangerous] 清空所有摘要"""
+        """清空所有摘要"""
         async for session in get_db_session():
             await session.execute(delete(UserSummary))
             await session.commit()
 
     async def check_and_summarize(self, chat_id: int):
         """
-        触发检查 (Fire-and-forget 模式，建议用 asyncio.create_task 调用)
+        触发检查 (Fire-and-forget)
         """
         if chat_id in self._processing: 
+            logger.debug(f"Summary check skipped for {chat_id}: Already processing.")
             return
 
-        # 防抖: 60秒内不重复检查
+        # 防抖 (5s)
         now = time.time()
         last_time = self._last_check.get(chat_id, 0)
-        if now - last_time < 60:
+        cooldown = 5
+        if now - last_time < cooldown:
+            logger.debug(f"Summary check skipped for {chat_id}: Cooldown ({int(now - last_time)}s < {cooldown}s).")
             return
 
         self._processing.add(chat_id)
@@ -63,7 +82,14 @@ class SummaryService:
 
     async def _process_summary(self, chat_id: int):
         async for session in get_db_session():
-            # 1. 获取当前状态
+            # 获取动态配置
+            from core.config_service import config_service
+            configs = await config_service.get_all_settings()
+            
+            token_threshold = int(configs.get("history_tokens", settings.SUMMARY_TRIGGER_TOKENS))
+            idle_seconds = int(configs.get("summary_idle_seconds", settings.SUMMARY_IDLE_SECONDS))
+
+            # 获取当前摘要
             stmt = select(UserSummary).where(UserSummary.chat_id == chat_id)
             result = await session.execute(stmt)
             user_summary = result.scalar_one_or_none()
@@ -71,7 +97,7 @@ class SummaryService:
             last_id = user_summary.last_summarized_msg_id if user_summary else 0
             old_summary = user_summary.content if user_summary else ""
 
-            # 2. 获取未总结消息
+            # 获取新增消息
             stmt_msgs = select(History).where(
                 (History.chat_id == chat_id) & 
                 (History.id > last_id)
@@ -83,7 +109,7 @@ class SummaryService:
             if not new_msgs:
                 return
 
-            # 3. 计算 Token 和 Idle 时间
+            # 计算 Trigger 条件
             text_buffer = ""
             for msg in new_msgs:
                 text_buffer += f"{msg.role}: {msg.content}\n"
@@ -91,18 +117,20 @@ class SummaryService:
             total_tokens = history_service.count_tokens(text_buffer)
             
             last_msg_time = new_msgs[-1].timestamp
-            # 这里简单判断: 如果最后一条消息距离现在超过阈值，视为 Idle
-            # 注意: timestamps in DB are typically UTC or local depending on setup. 
+            # 检查空闲时间
             # Assuming utcnow for coherence with models.
-            is_idle = (datetime.utcnow() - last_msg_time).total_seconds() > settings.SUMMARY_IDLE_SECONDS
+            idle_delta = (datetime.utcnow() - last_msg_time).total_seconds()
+            is_idle = idle_delta > idle_seconds
             
-            # 触发条件
-            should_summarize = (total_tokens >= settings.SUMMARY_TRIGGER_TOKENS) or is_idle
+            # 是否触发
+            should_summarize = (total_tokens >= token_threshold) or is_idle
+            
+            logger.info(f"Summary Check for {chat_id}: Tokens={total_tokens}/{token_threshold}, Idle={idle_delta:.0f}/{idle_seconds}, ShouldTrigger={should_summarize}")
 
             if should_summarize:
                 new_summary = await self._run_llm_summary(old_summary, text_buffer)
                 if new_summary:
-                    # 更新数据库 (Upsert)
+                    # 更新数据库
                     stmt_upsert = insert(UserSummary).values(
                         chat_id=chat_id,
                         content=new_summary,
@@ -118,7 +146,7 @@ class SummaryService:
                     )
                     await session.execute(stmt_upsert)
                     await session.commit()
-                    logger.info(f"Updated summary for {chat_id}. Tokens: {total_tokens}")
+                    logger.info(f"Successfully SAVED summary for {chat_id}. Content length: {len(new_summary)}. New Pointer: {new_msgs[-1].id}")
 
     async def _run_llm_summary(self, old_summary: str, new_content: str) -> str:
         """调用 LLM 生成新摘要"""

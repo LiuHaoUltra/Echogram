@@ -19,8 +19,8 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     """
     HTTP/Telegram 消息入口
     1. 鉴权
-    2. 存入 History (User 消息)
-    3. 放入 LazySender 缓冲队列
+    2. 存入历史
+    3. 放入缓冲队列 (LazySender)
     """
     user = update.effective_user
     chat = update.effective_chat
@@ -29,33 +29,28 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     if not message or not message.text:
         return
         
-    # 如果是指令 (以 / 开头)，直接返回，不走缓冲（由 CommandHandler 处理）
+    # 指令交由 CommandHandler 处理
     if message.text.strip().startswith('/'):
         return
 
     # --- 1. 访问控制 ---
-    allowed = False
     is_adm = is_admin(user.id)
     
-    logger.info(f"MSG [{chat.id}] from {user.first_name}: {message.text[:20]}...")
-
     if chat.type == constants.ChatType.PRIVATE:
-        # [NEW] 私聊仅用于管理
-        # 严格鉴权：只有管理员能收到提示，其他人静默
-        if is_admin(user.id):
-             await message.reply_text("⚠️ 私聊仅用于配置管理，请在群组中使用本机器人。\n\n如需管理，请使用 /dashboard。")
+        # 私聊：仅管理员可见，但不作为聊天记录处理
+        if is_adm:
+            # 可以在此处通过 /dashboard 管理，这里不做消息响应
+            pass
         return
     else:
-        # 检查是否在白名单
-        if await access_service.is_whitelisted(chat.id):
-            allowed = True
+        # 群组：必须在白名单内
+        if not await access_service.is_whitelisted(chat.id):
+            return
             
-    if not allowed:
-        # 静默，不回复
-        logger.info(f"Access Denied for Chat ID: {chat.id}")
-        return
+    # 通过鉴权后记录日志
+    logger.info(f"MSG [{chat.id}] from {user.first_name}: {message.text[:20]}...")
 
-    # --- 2. 存入历史 ---
+    # 存入历史
     # 检查引用
     reply_to_id = None
     reply_to_content = None
@@ -76,14 +71,19 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
         reply_to_content=reply_to_content
     )
     
-    # --- 3. 触发延迟发送 ---
-    # 将任务交给 LazySender，它会在防抖结束后调用 generate_response
+    # 通过 LazySender 防抖触发
     await lazy_sender.on_message(chat.id, context)
+
+    # 主动触发总结检查 (确保在 AI 回复前尽可能完成总结)
+    try:
+        asyncio.create_task(summary_service.check_and_summarize(chat.id))
+    except Exception as e:
+        logger.error(f"Failed to trigger proactive summary: {e}")
 
 async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     """
-    核心回复生成逻辑 (将被 LazySender 回调)
-    1. 读取 History (包含刚刚缓冲的消息)
+    核心回复生成逻辑 (LazySender 回调)
+    1. 读取历史
     2. 调用 LLM
     3. 发送回复
     """
@@ -102,18 +102,18 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id, "⚠️ 尚未配置 API Key，请使用 /dashboard 配置。")
         return
 
-    # [NEW] 获取长期记忆摘要
+    # 获取长期记忆摘要
     dynamic_summary = await summary_service.get_summary(chat_id)
 
-    # 组装 System Prompt (注入时间与时区 + Summary)
+    # 组装 System Prompt
     system_content = prompt_builder.build_system_prompt(
         system_prompt_custom, 
         timezone=timezone, 
         dynamic_summary=dynamic_summary
     )
     
-    # [NEW] 获取历史记录 (Token Controlled)
-    # 优先读取 DB 配置，没有则使用 Settings 默认值
+    # 获取历史记录 (Token 控制)
+    # 优先读取 DB 配置
     token_limit_str = configs.get("history_tokens")
     if token_limit_str and token_limit_str.isdigit():
         target_tokens = int(token_limit_str)
@@ -122,10 +122,10 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         
     history_msgs = await history_service.get_token_controlled_context(chat_id, target_tokens=target_tokens)
     
-    # 构造 OpenAI Messages
+    # 构造消息列表
     messages = [{"role": "system", "content": system_content}]
     
-    # 时区处理工具
+    # 时区转换
     import pytz
     try:
         tz = pytz.timezone(timezone)
@@ -158,9 +158,9 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         else:
             messages.append({"role": "assistant", "content": h.content})
         
-    # --- 3. 调用 API ---
-    # [Removal] 移除预先的正在输入状态，改为在生成后根据字数模拟
-    # await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+    # 调用 API
+    msg_count = len(messages)
+    logger.debug(f"Calling LLM ({model}) with {msg_count} messages...")
     
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
@@ -172,21 +172,20 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if not response.choices or not response.choices[0].message.content:
-             reply_content = "..." 
-             logger.warning("LLM returned empty content.")
+             reply_content = "" 
+             logger.warning(f"LLM ({model}) returned EMPTY content. Choices: {len(response.choices) if response.choices else 0}")
         else:
              reply_content = response.choices[0].message.content.strip()
              
         logger.info(f"RAW LLM OUTPUT: {reply_content!r}")
 
-        # [NEW] 响应隔离处理
-        # 1. 优先尝试提取 <chat>...</chat>
+        # 响应隔离
+        # 提取 <chat> 标签内容
         chat_match = re.search(r"<chat>(.*?)</chat>", reply_content, flags=re.DOTALL)
         if chat_match:
             reply_content = chat_match.group(1).strip()
         else:
-            # 如果未找到 <chat> 标签，记录警告，但为了防止丢消息，暂且保留原始内容
-            # 信任 Prompt 指令已足够强
+            # 未找到标签时记录警告
             logger.warning("Response Protocol Violation: No <chat> tags found in LLM output.")
 
         # 防御性清洗 (System tags)
@@ -201,40 +200,54 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         if not reply_content:
              reply_content = "..." 
 
-        # --- 4. 回复用户 ---
+        # 回复用户
         from utils.splitter import split_message
         
-        # 4.1 解析 React
-        react_emoji = None
-        react_target_id = None
+        # 解析并执行所有 React 指令
+        # Telegram 官方支持的免费基础 Emoji 白名单 (部分常用)
+        TG_FREE_REACTIONS = {
+            "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", 
+            "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊️", "🤡", 
+            "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯", "🤣", "🍴", 
+            "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", 
+            "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍️", 
+            "🤗", "🫡", "🎅", "🎄", "☃️", "💅", "🤪", "🗿", "🆒", "💘", 
+            "🙊", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️", "🤷", "🤷‍♀️", "😡"
+        }
         
-        react_match = re.search(r"(?:\\|/)?React[:\s]+([^:\s]+)(?::(\d+))?", reply_content, re.IGNORECASE)
+        react_pattern = r"(?:\\|/)?React[:\s]+([^:\s\n]+)(?::(\d+))?"
+        all_reacts = re.findall(react_pattern, reply_content, re.IGNORECASE)
         
-        if react_match:
+        for emoji, target_id_str in all_reacts:
+            # 清洗 Emoji：移除可能存在的额外空格或非法字符
+            cleaned_emoji = emoji.strip()
+            
+            if cleaned_emoji not in TG_FREE_REACTIONS:
+                logger.warning(f"Reaction ignored: '{cleaned_emoji}' is not in TG free whitelist.")
+                continue
+
             try:
-                react_emoji = react_match.group(1)
-                if react_match.group(2):
-                    react_target_id = int(react_match.group(2))
+                target_id = None
+                if target_id_str:
+                    target_id = int(target_id_str)
                 else:
-                    # 如果没有指定 Target ID，默认对“最后一条用户消息”React
+                    # 默认回应最后一条用户消息
                     last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
                     if last_user_msg:
-                        react_target_id = last_user_msg.message_id
-                    
-                reply_content = reply_content.replace(react_match.group(0), "").strip()
-            except:
-                pass
-
-        if react_emoji and react_target_id:
-            try:
-                from telegram import ReactionTypeEmoji
-                await context.bot.set_message_reaction(
-                    chat_id=chat_id,
-                    message_id=react_target_id,
-                    reaction=[ReactionTypeEmoji(react_emoji)]
-                )
+                        target_id = last_user_msg.message_id
+                
+                if target_id:
+                    from telegram import ReactionTypeEmoji
+                    await context.bot.set_message_reaction(
+                        chat_id=chat_id,
+                        message_id=target_id,
+                        reaction=[ReactionTypeEmoji(cleaned_emoji)]
+                    )
             except Exception as e:
-                logger.warning(f"Failed to set reaction: {e}")
+                logger.warning(f"Failed to set reaction ({cleaned_emoji}) on MSG {target_id}: {e}")
+
+        # 从回复中彻底移除所有 React 指令内容
+        reply_content = re.sub(react_pattern, "", reply_content, flags=re.IGNORECASE).strip()
         
         if not reply_content and react_emoji:
             return 
@@ -248,33 +261,33 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             target_id = None
             clean_part = part
             
-            match = re.search(r"(?:\\|/)?Repla?y[:\s]+(\d+)", part, re.IGNORECASE)
+            replay_pattern = r"(?:\\|/)?Repla?y[:\s]+(\d+)"
+            match = re.search(replay_pattern, part, re.IGNORECASE)
             if match:
                 try:
                     target_id = int(match.group(1))
-                    clean_part = part.replace(match.group(0), "").strip()
+                    # 全局清洗该片段中的所有回复指令
+                    clean_part = re.sub(replay_pattern, "", part, flags=re.IGNORECASE).strip()
                 except:
                     pass
             
             if not clean_part:
                 continue
 
-            # [NEW] 拟人化打字延迟逻辑
+            # 拟人化打字延迟
             
-            # 1. 多条消息之间的间隔 (1秒)
+            # 多条消息间隔 (1秒)
             if i > 0:
                 await asyncio.sleep(1.0)
             
-            # 2. 计算打字时间
-            # 规则：未包含命令的纯文本长度，每个字 0.2 秒
+            # 计算打字时间
+            # 规则：每个字 0.2 秒
             typing_duration = len(clean_part) * 0.2
             
             # 发送 Typing 状态
             await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
             
             # 等待模拟打字
-            # 注意：Telegram Typing status 持续 5s，如果 duration > 5s，它会消失。
-            # 为了更真实，这里可以每 4.5s 补发一次，但为了简洁，暂且只发一次。
             await asyncio.sleep(typing_duration)
 
             try:
@@ -292,7 +305,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # 保存 AI 回复
         await history_service.add_message(chat_id, "assistant", reply_content)
         
-        # [NEW] 触发后台总结任务 (Fire-and-Forget)
+        # 触发后台总结
         try:
             asyncio.create_task(summary_service.check_and_summarize(chat_id))
         except Exception as e:
@@ -316,8 +329,10 @@ async def process_reaction_update(update: Update, context: ContextTypes.DEFAULT_
     user = reaction.user
     message_id = reaction.message_id
     
-    # [NEW] 私聊静默：不记录 Reaction
+    # [NEW] 访问控制：私聊或非白名单群组静默
     if chat.type == constants.ChatType.PRIVATE:
+        return
+    if not await access_service.is_whitelisted(chat.id):
         return
         
     if user and user.id == context.bot.id:
