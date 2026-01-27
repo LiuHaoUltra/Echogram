@@ -3,4 +3,4 @@ from models.base import Base
 from models.config import Config
 from models.whitelist import Whitelist
 from models.history import History
-from models.summary import ConversationSummary
+from models.summary import ConversationSummary, UserSummary

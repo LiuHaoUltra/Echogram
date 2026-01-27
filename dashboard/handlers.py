@@ -15,12 +15,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type != constants.ChatType.PRIVATE:
         if is_admin(user.id):
              await update.message.reply_text("👋 管理员你好。请私聊我进行配置。")
-        else:
-             await update.message.reply_text("👋 嗨，我是 Echogram AI 伴侣。")
         return
 
     if not is_admin(user.id):
-        await update.message.reply_text("👋 嗨，我是 Echogram AI。目前我只服务于特定用户。")
+        # 陌生人私聊 /start -> 静默
         return
         
     # 2. 检查是否需要初始化
@@ -62,32 +60,21 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
         if len(summary_model) > 30: summary_model = summary_model[:27] + "..."
         summary_model_disp = f"<code>{summary_model}</code>"
         
-    limit = configs.get("context_limit", "30")
-    latency = configs.get("aggregation_latency", "10.0")
-
-    # 获取最后总结时间
-    last_summary = "N/A"
-    if chat_id:
-        # Avoid circular import at top level
-        from core.memory_service import memory_service
-        last_summary = await memory_service.get_latest_summary_time(chat_id)
-    
     return (
-        "<b>Echogram 控制中心</b>\n\n"
-        "📊 <b>系统概览</b>\n"
+        "<b>Echogram 控制中心 (Global Config)</b>\n\n"
+        "📊 <b>系统参数</b>\n"
         f"• Base URL: <code>{base_url}</code>\n"
         f"• Main Model: <code>{model}</code>\n"
         f"• Summary Model: {summary_model_disp}\n"
-        f"• Context Window: <code>{limit} msgs</code>\n"
         f"• Aggregation Latency: <code>{latency} s</code>\n"
-        f"• Last Summary: <code>{last_summary}</code>\n\n"
+        f"• Token Limit: <code>{settings.HISTORY_WINDOW_TOKENS} tokens</code>\n\n"
         "请选择配置项："
     )
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
-    if not is_admin(user.id): return
+    if not is_admin(user.id): return # Silence
     
     overview_text = await get_dashboard_overview_text(user.id)
     
@@ -107,6 +94,11 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     获取当前 Chat ID (方便添加白名单)
     """
     chat = update.effective_chat
+    
+    # 鉴权
+    if not is_admin(update.effective_user.id):
+        return
+        
     await update.message.reply_text(
         f"🆔 <b>Current Chat ID:</b> <code>{chat.id}</code>\n"
         f"Type: {chat.type}",

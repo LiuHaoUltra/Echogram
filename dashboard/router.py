@@ -13,7 +13,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配所有可能的“进入输入模式”的按钮 callback_data regex
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -41,7 +41,7 @@ def get_dashboard_handlers():
             WAITING_INPUT_SYSTEM_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_system_prompt)],
             WAITING_INPUT_WHITELIST_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.add_whitelist_id)],
             WAITING_INPUT_WHITELIST_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.remove_whitelist_id)],
-            WAITING_INPUT_CONTEXT_LIMIT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_context_limit)]
+            WAITING_INPUT_HISTORY_TOKENS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_history_tokens)]
         },
         fallbacks=[
             CommandHandler("dashboard", dashboard_command),
@@ -69,7 +69,7 @@ def get_dashboard_handlers():
             # [NEW] Wizard 摘要模型
             WIZARD_INPUT_SUMMARY_MODEL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_handlers.wizard_save_summary_model),
-                CallbackQueryHandler(wizard_handlers.wizard_use_default_url, pattern="^use_default_url$"), # Reusing pattern? No, we don't need this here.
+                CallbackQueryHandler(wizard_handlers.wizard_skip_summary_model, pattern="^skip_summary_model$"),
                 # Use wrapper for model selection
                 CallbackQueryHandler(wizard_handlers.wizard_model_callback_wrapper)
             ],

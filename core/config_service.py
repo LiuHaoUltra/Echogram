@@ -1,4 +1,4 @@
-from sqlalchemy import select, update
+from sqlalchemy import select, update, delete
 from sqlalchemy.dialects.sqlite import insert
 from config.database import get_db_session
 from models.config import Config
@@ -36,5 +36,12 @@ class ConfigService:
             result = await session.execute(select(Config))
             configs = result.scalars().all()
             return {c.key: c.value for c in configs}
+
+    @staticmethod
+    async def factory_reset():
+        """清空所有配置"""
+        async for session in get_db_session():
+            await session.execute(delete(Config))
+            await session.commit()
 
 config_service = ConfigService()

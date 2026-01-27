@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, Text, DateTime, Index
+from sqlalchemy import BigInteger, Text, DateTime, Index, func
 from sqlalchemy.orm import Mapped, mapped_column
 from models.base import Base
 
@@ -29,3 +29,18 @@ class ConversationSummary(Base):
 
     def __repr__(self):
         return f"<ConversationSummary(chat={self.chat_id}, range={self.start_msg_id}-{self.end_msg_id})>"
+
+class UserSummary(Base):
+    """
+    用户长期记忆摘要表 (User Summary)
+    存储动态生成的 Long-term Memory Summary
+    """
+    __tablename__ = "user_summaries"
+    
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    content: Mapped[str] = mapped_column(Text, default="")  # 摘要文本
+    last_summarized_msg_id: Mapped[int] = mapped_column(BigInteger, default=0) # 进度指针 (上次总结到的 Message ID)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self):
+        return f"<UserSummary(chat_id={self.chat_id}, updated_at='{self.updated_at}')>"

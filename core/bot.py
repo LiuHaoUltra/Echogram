@@ -42,8 +42,9 @@ def run_bot():
     application.add_handlers(get_dashboard_handlers())
     
     # 1.5 Admin Handlers
-    from core.admin_handlers import reset_command
+    from core.admin_handlers import reset_command, stats_command
     application.add_handler(CommandHandler("reset", reset_command))
+    application.add_handler(CommandHandler("stats", stats_command))
     
     # 2. Chat Engine Handlers (Priority: Low, catch-all)
     from telegram.ext import MessageHandler, filters

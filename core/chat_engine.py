@@ -6,7 +6,8 @@ import re
 from core.access_service import access_service
 from core.history_service import history_service
 from core.config_service import config_service
-from core.memory_service import memory_service
+from core.summary_service import summary_service
+from config.settings import settings
 from core.secure import is_admin
 from core.lazy_sender import lazy_sender
 from utils.logger import logger
@@ -38,8 +39,12 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     
     logger.info(f"MSG [{chat.id}] from {user.first_name}: {message.text[:20]}...")
 
-    if chat.type == constants.ChatType.PRIVATE and is_adm:
-        allowed = True
+    if chat.type == constants.ChatType.PRIVATE:
+        # [NEW] 私聊仅用于管理
+        # 严格鉴权：只有管理员能收到提示，其他人静默
+        if is_admin(user.id):
+             await message.reply_text("⚠️ 私聊仅用于配置管理，请在群组中使用本机器人。\n\n如需管理，请使用 /dashboard。")
+        return
     else:
         # 检查是否在白名单
         if await access_service.is_whitelisted(chat.id):
@@ -91,15 +96,14 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     model = configs.get("model_name", "gpt-3.5-turbo")
     system_prompt_custom = configs.get("system_prompt")
     timezone = configs.get("timezone", "UTC")
-    # 读取上下文限制，默认 30
-    context_limit = int(configs.get("context_limit", "30"))
+
     
     if not api_key:
         await context.bot.send_message(chat_id, "⚠️ 尚未配置 API Key，请使用 /dashboard 配置。")
         return
 
     # [NEW] 获取长期记忆摘要
-    dynamic_summary = await memory_service.get_latest_summary(chat_id)
+    dynamic_summary = await summary_service.get_summary(chat_id)
 
     # 组装 System Prompt (注入时间与时区 + Summary)
     system_content = prompt_builder.build_system_prompt(
@@ -108,8 +112,15 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         dynamic_summary=dynamic_summary
     )
     
-    # 获取历史记录 (Rolling Context)
-    history_msgs = await history_service.get_recent_context(chat_id, limit=context_limit)
+    # [NEW] 获取历史记录 (Token Controlled)
+    # 优先读取 DB 配置，没有则使用 Settings 默认值
+    token_limit_str = configs.get("history_tokens")
+    if token_limit_str and token_limit_str.isdigit():
+        target_tokens = int(token_limit_str)
+    else:
+        target_tokens = settings.HISTORY_WINDOW_TOKENS
+        
+    history_msgs = await history_service.get_token_controlled_context(chat_id, target_tokens=target_tokens)
     
     # 构造 OpenAI Messages
     messages = [{"role": "system", "content": system_content}]
@@ -283,7 +294,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         
         # [NEW] 触发后台总结任务 (Fire-and-Forget)
         try:
-            asyncio.create_task(memory_service.check_and_summarize(chat_id))
+            asyncio.create_task(summary_service.check_and_summarize(chat_id))
         except Exception as e:
             logger.error(f"Failed to trigger summary task: {e}")
 
@@ -305,6 +316,10 @@ async def process_reaction_update(update: Update, context: ContextTypes.DEFAULT_
     user = reaction.user
     message_id = reaction.message_id
     
+    # [NEW] 私聊静默：不记录 Reaction
+    if chat.type == constants.ChatType.PRIVATE:
+        return
+        
     if user and user.id == context.bot.id:
         return
 

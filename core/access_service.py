@@ -22,6 +22,13 @@ class AccessService:
             await session.commit()
 
     @staticmethod
+    async def factory_reset():
+        """清空所有白名单"""
+        async for session in get_db_session():
+            await session.execute(delete(Whitelist))
+            await session.commit()
+
+    @staticmethod
     async def get_all_whitelist():
         async for session in get_db_session():
             result = await session.execute(select(Whitelist))

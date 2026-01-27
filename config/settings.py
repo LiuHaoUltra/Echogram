@@ -18,6 +18,16 @@ class Settings:
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+    # Memory System [New]
+    # 核心：短期记忆窗口大小 (Token)
+    HISTORY_WINDOW_TOKENS = int(os.getenv("HISTORY_WINDOW_TOKENS", 6000))
+    # 摘要：触发阈值 (Token)
+    SUMMARY_TRIGGER_TOKENS = int(os.getenv("SUMMARY_TRIGGER_TOKENS", 2000))
+    # 摘要：闲置阈值 (秒)
+    SUMMARY_IDLE_SECONDS = int(os.getenv("SUMMARY_IDLE_SECONDS", 10800))
+    # 摘要：使用的廉价模型
+    SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
+
     @classmethod
     def validate(cls):
         if not cls.TG_BOT_TOKEN:

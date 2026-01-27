@@ -1,6 +1,7 @@
 from openai import AsyncOpenAI
 from core.config_service import config_service
 from utils.logger import logger
+import json
 
 async def fetch_available_models():
     """
@@ -28,3 +29,27 @@ async def fetch_available_models():
     except Exception as e:
         logger.error(f"Failed to fetch models: {e}")
         return False, str(e)
+
+async def simple_chat(model: str, messages: list, temperature: float = 0.7) -> str:
+    """
+    通用 LLM 调用接口 (用于后台任务如总结)
+    """
+    configs = await config_service.get_all_settings()
+    api_key = configs.get("api_key")
+    base_url = configs.get("api_base_url")
+
+    if not api_key:
+        logger.error("API Key not set for simple_chat")
+        return ""
+
+    try:
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature
+        )
+        return response.choices[0].message.content or ""
+    except Exception as e:
+        logger.error(f"LLM call failed: {e}")
+        return ""

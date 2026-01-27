@@ -81,16 +81,18 @@ async def save_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"✅ 摘要模型已设置为: {text}", reply_markup=get_memory_keyboard())
     return ConversationHandler.END
 
-async def save_context_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+
+async def save_history_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     try:
         val = int(text)
-        if val < 1 or val > 200:
-             await update.message.reply_text(f"❌ 范围错误，请输入 1 ~ 200 之间的整数。", reply_markup=get_memory_keyboard())
+        if val < 500 or val > 100000:
+             await update.message.reply_text(f"❌ 范围错误，请输入 500 ~ 100000 之间的整数。", reply_markup=get_memory_keyboard())
              return ConversationHandler.END
         
-        await config_service.set_value("context_limit", str(val))
-        await update.message.reply_text(f"✅ 上下文上限已更新为: {val} 条", reply_markup=get_memory_keyboard())
+        await config_service.set_value("history_tokens", str(val))
+        await update.message.reply_text(f"✅ 历史记录 Token 上限已更新为: {val}", reply_markup=get_memory_keyboard())
     except ValueError:
         await update.message.reply_text(f"❌ 输入无效，必须是整数。", reply_markup=get_memory_keyboard())
     return ConversationHandler.END

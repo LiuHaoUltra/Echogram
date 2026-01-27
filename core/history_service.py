@@ -1,17 +1,33 @@
+import tiktoken
 from sqlalchemy import select, delete
 from config.database import get_db_session
 from models.history import History
 
 class HistoryService:
-    @staticmethod
-    async def clear_history(chat_id: int):
+    _encoding = None # Class-level cache
+
+    def __init__(self):
+        # 单例化 Encoding
+        if HistoryService._encoding is None:
+            HistoryService._encoding = tiktoken.get_encoding("cl100k_base")
+
+    def count_tokens(self, text: str) -> int:
+        if not text: return 0
+        return len(self._encoding.encode(text))
+
+    async def clear_history(self, chat_id: int):
         """清空指定会话的记忆"""
         async for session in get_db_session():
             await session.execute(delete(History).where(History.chat_id == chat_id))
             await session.commit()
 
-    @staticmethod
-    async def add_message(chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None):
+    async def factory_reset(self):
+        """[Dangerous] 清空所有历史记录"""
+        async for session in get_db_session():
+            await session.execute(delete(History))
+            await session.commit()
+
+    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None):
         """添加一条消息记录"""
         async for session in get_db_session():
             msg = History(
@@ -25,11 +41,57 @@ class HistoryService:
             session.add(msg)
             await session.commit()
 
-    @staticmethod
-    async def get_recent_context(chat_id: int, limit: int = 10):
-        """获取最近 N 条记录 (正序返回)"""
+    async def get_token_controlled_context(self, chat_id: int, target_tokens: int):
+        """
+        [核心逻辑] 获取历史，直到填满 target_tokens
+        """
         async for session in get_db_session():
-            # 先倒序取最近的，再反转为正序
+            # 1. 预取最近 200 条 (倒序: New -> Old)
+            # 200条 * 50 tokens = 10000 tokens，足够覆盖大多数窗口
+            stmt = select(History).where(History.chat_id == chat_id)\
+                .order_by(History.timestamp.desc()).limit(200)
+            result = await session.execute(stmt)
+            candidates = result.scalars().all()
+
+            selected = []
+            current_tokens = 0
+
+            # 2. 贪婪填充
+            for msg in candidates:
+                # 估算每条消息开销 (Role等) 约 4 tokens
+                cost = self.count_tokens(msg.content) + 4
+                
+                if current_tokens + cost > target_tokens:
+                    break # 满了，停止
+                
+                selected.append(msg)
+                current_tokens += cost
+
+            # 3. 反转回正序 (Old -> New)
+            return list(reversed(selected))
+
+    async def calculate_context_usage(self, chat_id: int, target_tokens: int) -> int:
+        """
+        计算当前上下文实际占用的 Token 数
+        """
+        async for session in get_db_session():
+            stmt = select(History).where(History.chat_id == chat_id)\
+                .order_by(History.timestamp.desc()).limit(200)
+            result = await session.execute(stmt)
+            candidates = result.scalars().all()
+
+            current_tokens = 0
+            for msg in candidates:
+                cost = self.count_tokens(msg.content) + 4
+                if current_tokens + cost > target_tokens:
+                    break
+                current_tokens += cost
+            
+            return current_tokens
+
+    async def get_recent_context(self, chat_id: int, limit: int = 10):
+        """[Deprecated] 获取最近 N 条记录 (正序返回)"""
+        async for session in get_db_session():
             stmt = select(History)\
                 .where(History.chat_id == chat_id)\
                 .order_by(History.timestamp.desc())\

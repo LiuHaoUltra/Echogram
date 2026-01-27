@@ -1,7 +1,7 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 from core.config_service import config_service
-from dashboard.states import WIZARD_INPUT_URL, WIZARD_INPUT_KEY, WIZARD_INPUT_MODEL, WIZARD_INPUT_TIMEZONE
+from dashboard.states import WIZARD_INPUT_URL, WIZARD_INPUT_KEY, WIZARD_INPUT_MODEL, WIZARD_INPUT_TIMEZONE, WIZARD_INPUT_SUMMARY_MODEL
 from dashboard.keyboards import get_main_menu_keyboard
 
 # --- Keyboards ---
@@ -27,7 +27,15 @@ def get_timezone_keyboard():
 # 1. Step 1: Timezone (Entry)
 async def start_wizard_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """进入向导：第一步设置时区"""
+    """进入向导：第一步设置时区"""
     query = update.callback_query
+    
+    # 鉴权
+    from core.secure import is_admin
+    if not is_admin(update.effective_user.id):
+        await query.answer("Access Denied", show_alert=True)
+        return ConversationHandler.END
+
     await query.answer()
     
     msg = (
@@ -159,7 +167,9 @@ async def _ask_summary_model(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "建议使用更便宜、速度更快的模型 (如 `gpt-4o-mini`) 来处理后台摘要任务，以节省成本。\n"
         "如果不设置，将默认使用主模型。"
     )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    # 添加一个明显的跳过按钮
+    keyboard = [[InlineKeyboardButton("⏭️ 使用主模型 (默认)", callback_data="skip_summary_model")]]
+    await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     
     # 使用面板，设置 target='summary'
     # 注意：wizard 状态机需要能够处理从面板返回的回调

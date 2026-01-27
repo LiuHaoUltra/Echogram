@@ -75,6 +75,12 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
     data = query.data
     user_id = update.effective_user.id
     
+    # 鉴权
+    from core.secure import is_admin
+    if not is_admin(user_id):
+        await query.answer("Access Denied", show_alert=True)
+        return ConversationHandler.END
+    
     # 读取目标
     target = context.user_data.get('model_selection_target', 'main')
     target_display = "Main" if target == "main" else "Summary"
