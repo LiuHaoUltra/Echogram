@@ -28,6 +28,9 @@ class Settings:
     # 摘要模型
     SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
 
+    # RSSHub
+    RSSHUB_HOST = os.getenv("RSSHUB_HOST", "http://rsshub:1200")
+
     @classmethod
     def validate(cls):
         if not cls.TG_BOT_TOKEN:

@@ -199,6 +199,204 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         )
         return ConversationHandler.END
 
+    # --- 5. 新闻推送 (News Push) 管理 ---
+    if data == "menu_agentic":
+        from dashboard.keyboards import get_agentic_keyboard
+        await query.edit_message_text(text="<b>📺 新闻推送 (News Push)</b>", reply_markup=get_agentic_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
+
+    if data == "list_subs":
+        from core.news_push_service import news_push_service
+        subs = await news_push_service.get_all_subscriptions()
+        if not subs:
+            await query.answer("暂无订阅源", show_alert=True)
+            return ConversationHandler.END
+            
+        # 动态生成列表按钮
+        keyboard = []
+        for sub in subs:
+            # Status Icon
+            status_icon = "✅" if sub.status == "normal" else "❌"
+            error_hint = f" ({sub.last_error})" if sub.status == "error" and sub.last_error else ""
+            
+            # Row 1: Name & Status
+            keyboard.append([InlineKeyboardButton(f"{status_icon} {sub.name}{error_hint}", callback_data="noop")])
+            # Row 2: Actions
+            keyboard.append([
+                InlineKeyboardButton("🎯 分发对象", callback_data=f"manage_targets:{sub.id}"),
+                InlineKeyboardButton("🗑️ 删除", callback_data=f"del_sub:{sub.id}")
+            ])
+            
+        keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="menu_agentic")])
+        
+        await query.edit_message_text(text="<b>📋 订阅源状态监控 & 管理:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        return ConversationHandler.END
+
+    if data.startswith("del_sub:"):
+        from core.news_push_service import news_push_service
+        sub_id = int(data.split(":")[1])
+        await news_push_service.remove_subscription(sub_id)
+        await query.answer("删除成功")
+        # Return to list
+        # ... (Recursively call logic or just trigger list_subs? simpler to just re-emit list logic or copy-paste)
+        # For simplicity, let's just trigger a re-render by modifying data and recursively calling? No, context recursion is messy.
+        # Just copy the list render logic.
+        subs = await news_push_service.get_all_subscriptions()
+        keyboard = []
+        if subs:
+            for sub in subs:
+                status_icon = "✅" if sub.status == "normal" else "❌"
+                keyboard.append([InlineKeyboardButton(f"{status_icon} {sub.name}", callback_data="noop")])
+                keyboard.append([
+                    InlineKeyboardButton("🎯 分发对象", callback_data=f"manage_targets:{sub.id}"),
+                    InlineKeyboardButton("🗑️ 删除", callback_data=f"del_sub:{sub.id}")
+                ])
+        keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="menu_agentic")])
+        await query.edit_message_text(text="<b>📋 订阅源状态监控 & 管理:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        return ConversationHandler.END
+        
+    if data.startswith("manage_targets:"):
+        from core.news_push_service import news_push_service
+        from sqlalchemy import select
+        from models.news import NewsSubscription, ChatSubscription
+        from config.database import get_db_session
+        
+        sub_id = int(data.split(":")[1])
+        
+        # Get Subscription Name
+        sub_name = "未知"
+        async for session in get_db_session():
+            r = await session.execute(select(NewsSubscription).where(NewsSubscription.id == sub_id))
+            obj = r.scalar_one_or_none()
+            if obj: sub_name = obj.name
+        
+        # Get All Whitelisted Chats
+        white_chats = await access_service.get_all_whitelist()
+        
+        # Get Linked Chats
+        linked_chats = await news_push_service._get_linked_chats(sub_id)
+        
+        keyboard = []
+        for chat in white_chats:
+            is_linked = chat.chat_id in linked_chats
+            check_mark = "✅" if is_linked else "⬜"
+            btn_text = f"{check_mark} {chat.description or chat.chat_id}"
+            # Toggle Callback
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"toggle_target:{sub_id}:{chat.chat_id}")])
+            
+        keyboard.append([InlineKeyboardButton("🔙 返回列表", callback_data="list_subs")])
+        
+        await query.edit_message_text(
+            text=f"<b>🎯 分发管理: {sub_name}</b>\n点击群组以开启/关闭推送。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    if data.startswith("toggle_target:"):
+        from core.news_push_service import news_push_service
+        from models.news import ChatSubscription
+        from sqlalchemy import delete
+        
+        parts = data.split(":")
+        sub_id = int(parts[1])
+        chat_id = int(parts[2])
+        
+        async for session in get_db_session():
+            # Check exist
+            stmt = select(ChatSubscription).where(
+                ChatSubscription.subscription_id == sub_id,
+                ChatSubscription.chat_id == chat_id
+            )
+            existing = (await session.execute(stmt)).scalar_one_or_none()
+            
+            if existing:
+                # Remove
+                await session.execute(delete(ChatSubscription).where(ChatSubscription.id == existing.id))
+                await session.commit()
+                await query.answer(f"已移除订阅: {chat_id}")
+            else:
+                # Add
+                new_bind = ChatSubscription(subscription_id=sub_id, chat_id=chat_id)
+                session.add(new_bind)
+                await session.commit()
+                await query.answer(f"已添加订阅: {chat_id}")
+                
+        # Refresh UI (Similar to manage_targets logic)
+        # Reuse logic by constructing a fake data call? 
+        # Or just re-run the layout construction. 
+        # Re-running is safer.
+        sub_name = "未知"
+        async for session in get_db_session():
+            r = await session.execute(select(NewsSubscription).where(NewsSubscription.id == sub_id))
+            obj = r.scalar_one_or_none()
+            if obj: sub_name = obj.name
+
+        white_chats = await access_service.get_all_whitelist()
+        linked = await news_push_service._get_linked_chats(sub_id)
+        
+        keyboard = []
+        for chat in white_chats:
+            is_linked = chat.chat_id in linked
+            check_mark = "✅" if is_linked else "⬜"
+            btn_text = f"{check_mark} {chat.description or chat.chat_id}"
+            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"toggle_target:{sub_id}:{chat.chat_id}")])
+        keyboard.append([InlineKeyboardButton("🔙 返回列表", callback_data="list_subs")])
+        
+        await query.edit_message_text(
+            text=f"<b>🎯 分发管理: {sub_name}</b>\n点击群组以开启/关闭推送。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    if data == "add_sub_request":
+        await query.edit_message_text(
+            text=(
+                "请输入 RSSHub 路由和名称。\n"
+                "格式: <code>路由|名称</code>\n"
+                "示例: <code>/telegram/channel/tginfo|TG Info</code>"
+            ),
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_SUB_ADD
+        return WAITING_INPUT_SUB_ADD
+
+    if data == "set_active_time":
+        current_start = await config_service.get_value("agentic_active_start", "08:00")
+        current_end = await config_service.get_value("agentic_active_end", "23:00")
+        
+        await query.edit_message_text(
+            text=(
+                f"⏰ <b>设置活跃时间 (Active Hours)</b>\n\n"
+                f"当前: <code>{current_start} - {current_end}</code>\n\n"
+                "Bot 仅在此时间段内主动推送新闻。\n"
+                "请输入新范围 (格式: HH:MM-HH:MM)\n"
+                "示例: <code>09:00-22:00</code>"
+            ),
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_ACTIVE_HOURS
+        return WAITING_INPUT_ACTIVE_HOURS
+
+    if data == "set_idle_time":
+        current_val = await config_service.get_value("agentic_idle_threshold", "30")
+        await query.edit_message_text(
+            text=(
+                f"💤 <b>设置闲置阈值 (Idle Threshold)</b>\n\n"
+                f"当前: <code>{current_val} 分钟</code>\n\n"
+                "Bot 仅在群组闲置超过此时间后才会推送（防插嘴）。\n"
+                "请输入分钟数 (例如 60):"
+            ),
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_IDLE_THRESHOLD
+        return WAITING_INPUT_IDLE_THRESHOLD
 
     return ConversationHandler.END

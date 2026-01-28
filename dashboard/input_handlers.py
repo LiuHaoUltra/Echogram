@@ -178,3 +178,78 @@ async def save_temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(f"❌ 输入无效，必须是数字。", reply_markup=get_persona_keyboard())
     return ConversationHandler.END
+
+# --- Agentic Soul 设置 ---
+async def save_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    
+    # 格式: route|name
+    if "|" not in text:
+        await update.message.reply_text("❌ 格式错误，请使用 `route|name`", reply_markup=get_cancel_keyboard())
+        from dashboard.states import WAITING_INPUT_SUB_ADD
+        return WAITING_INPUT_SUB_ADD
+        
+    parts = text.split("|", 1)
+    route = parts[0].strip()
+    name = parts[1].strip()
+    
+    from core.news_push_service import news_push_service
+    # Auto-bind to current chat
+    success = await news_push_service.add_subscription(route, name, bind_chat_id=update.effective_chat.id)
+    
+    from dashboard.keyboards import get_agentic_keyboard
+    if success:
+        await update.message.reply_text(f"✅ 订阅源 '{name}' 添加成功！\n已自动绑定到当前群组 (ID: {update.effective_chat.id})。", reply_markup=get_agentic_keyboard())
+    else:
+        await update.message.reply_text(f"❌ 添加失败，可能路由已存在或格式错误。", reply_markup=get_agentic_keyboard())
+        
+    return ConversationHandler.END
+
+async def save_active_hours(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    
+    # Validation
+    try:
+        parts = text.split("-")
+        if len(parts) != 2: raise ValueError
+        # Check standard time format
+        from datetime import datetime
+        datetime.strptime(parts[0].strip(), "%H:%M")
+        datetime.strptime(parts[1].strip(), "%H:%M")
+    except:
+        await update.message.reply_text("❌ 格式错误，请使用 HH:MM-HH:MM (例如 09:00-22:00)", reply_markup=get_cancel_keyboard())
+        from dashboard.states import WAITING_INPUT_ACTIVE_HOURS
+        return WAITING_INPUT_ACTIVE_HOURS
+
+    start_str = parts[0].strip()
+    end_str = parts[1].strip()
+
+    await config_service.set_value("agentic_active_start", start_str)
+    await config_service.set_value("agentic_active_end", end_str)
+    
+    from dashboard.keyboards import get_agentic_keyboard
+    await update.message.reply_text(f"✅ 活跃时间已设置为: {start_str} - {end_str}", reply_markup=get_agentic_keyboard())
+    return ConversationHandler.END
+
+async def save_idle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    
+    try:
+        val = int(text)
+        if val < 5:
+            await update.message.reply_text("❌ 时间太短 (至少 5 分钟)", reply_markup=get_cancel_keyboard())
+            from dashboard.states import WAITING_INPUT_IDLE_THRESHOLD
+            return WAITING_INPUT_IDLE_THRESHOLD
+            
+        await config_service.set_value("agentic_idle_threshold", str(val))
+    except:
+        await update.message.reply_text("❌ 请输入有效的数字", reply_markup=get_cancel_keyboard())
+        from dashboard.states import WAITING_INPUT_IDLE_THRESHOLD
+        return WAITING_INPUT_IDLE_THRESHOLD
+        
+    from dashboard.keyboards import get_agentic_keyboard
+    await update.message.reply_text(f"✅ 闲置阈值已更新为: {val} 分钟", reply_markup=get_agentic_keyboard())
+    return ConversationHandler.END

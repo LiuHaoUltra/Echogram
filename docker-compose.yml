@@ -22,3 +22,18 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+    depends_on:
+      - rsshub
+    environment:
+      - RSSHUB_HOST=http://rsshub:1200
+
+  rsshub:
+    image: diygod/rsshub:latest
+    container_name: echogram_rsshub
+    restart: unless-stopped
+    environment:
+      - CACHE_TYPE=memory
+      - LISTEN_INADDR=0.0.0.0
+    # ports:
+    #   - "1200:1200" # Uncomment for external access debugging

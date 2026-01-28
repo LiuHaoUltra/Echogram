@@ -147,7 +147,8 @@ class SummaryService:
 
             if should_summarize:
                 # 仅对缓冲区内容进行归档
-                new_summary = await self._run_llm_summary(old_summary, text_buffer)
+                summary_model = configs.get("summary_model_name")
+                new_summary = await self._run_llm_summary(old_summary, text_buffer, model_name=summary_model)
                 if new_summary:
                     # 更新数据库，指针指向缓冲区最后一条消息
                     final_id = buffer_msgs[-1].id
@@ -168,7 +169,7 @@ class SummaryService:
                     await session.commit()
                     logger.info(f"Successfully ARCHIVED buffer for {chat_id}. Buffer Tokens: {buffer_tokens}. New Pointer: {final_id}")
 
-    async def _run_llm_summary(self, old_summary: str, new_content: str) -> str:
+    async def _run_llm_summary(self, old_summary: str, new_content: str, model_name: str = None) -> str:
         """调用 LLM 生成新摘要"""
         system_prompt = (
             "你是一个专业的会话记忆管家。你的任务是将新发生的对话片段整合进用户的【长期记忆摘要】中。\n\n"
@@ -190,6 +191,7 @@ class SummaryService:
             {"role": "user", "content": user_prompt}
         ]
 
-        return await simple_chat(settings.SUMMARY_MODEL, messages, temperature=0.3)
+        target_model = model_name or settings.SUMMARY_MODEL
+        return await simple_chat(target_model, messages, temperature=0.3)
 
 summary_service = SummaryService()

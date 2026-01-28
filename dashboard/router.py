@@ -13,7 +13,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配入口按钮
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -30,8 +30,8 @@ def get_dashboard_handlers():
             ],
             # 模型搜索
             WAITING_INPUT_MODEL_SEARCH: [
-                 MessageHandler(filters.TEXT & ~filters.COMMAND, model_handlers.perform_model_search),
-                 CallbackQueryHandler(model_handlers.handle_model_callback) # Allow cancel/back
+                MessageHandler(filters.TEXT & ~filters.COMMAND, model_handlers.perform_model_search),
+                CallbackQueryHandler(model_handlers.handle_model_callback) # Allow cancel/back
             ],
             # 摘要模型设置
             WAITING_INPUT_SUMMARY_MODEL: [
@@ -42,7 +42,11 @@ def get_dashboard_handlers():
             WAITING_INPUT_WHITELIST_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.add_whitelist_id)],
             WAITING_INPUT_WHITELIST_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.remove_whitelist_id)],
             WAITING_INPUT_HISTORY_TOKENS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_history_tokens)],
-            WAITING_INPUT_TEMPERATURE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_temperature)]
+            WAITING_INPUT_TEMPERATURE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_temperature)],
+            # Agentic Soul
+            WAITING_INPUT_SUB_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_subscription)],
+            WAITING_INPUT_ACTIVE_HOURS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_active_hours)],
+            WAITING_INPUT_IDLE_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_idle_threshold)]
         },
         fallbacks=[
             CommandHandler("dashboard", dashboard_command),

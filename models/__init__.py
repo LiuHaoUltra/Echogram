@@ -4,3 +4,4 @@ from models.config import Config
 from models.whitelist import Whitelist
 from models.history import History
 from models.summary import ConversationSummary, UserSummary
+from models.news import NewsSubscription, ChatSubscription

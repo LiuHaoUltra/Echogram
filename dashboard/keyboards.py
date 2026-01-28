@@ -11,8 +11,24 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🧹 记忆管理", callback_data="menu_memory")
         ],
         [
+            InlineKeyboardButton("🤖 Agentic Soul (自主意识)", callback_data="menu_agentic")
+        ],
+        [
             InlineKeyboardButton("❌ 关闭面板", callback_data="close_dashboard")
         ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# ... (Existing API settings ... )
+
+def get_agentic_keyboard() -> InlineKeyboardMarkup:
+    """自主意识菜单"""
+    keyboard = [
+        [InlineKeyboardButton("➕ 添加订阅源 (/sub)", callback_data="add_sub_request")],
+        [InlineKeyboardButton("📋 管理订阅列表", callback_data="list_subs")],
+        [InlineKeyboardButton("⏰ 设置活跃时间 (DND)", callback_data="set_active_time")],
+        [InlineKeyboardButton("💤 设置闲置阈值 (Idle)", callback_data="set_idle_time")],
+        [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 

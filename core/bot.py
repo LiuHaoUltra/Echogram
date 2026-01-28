@@ -2,12 +2,15 @@ from telegram.ext import ApplicationBuilder, Application, CommandHandler
 from config.settings import settings
 from config.database import init_db
 from utils.logger import logger
+# 引入模型以确保建表
+import models 
+from core.news_push_service import news_push_service
 
 async def post_init(application: Application):
     """
     Bot 初始化
     1. 初始化数据库
-    2. 后续可添加指令菜单设置
+    2. 注册定时任务 (NewsPush)
     """
     logger.info("Initializing database...")
     await init_db()
@@ -16,6 +19,22 @@ async def post_init(application: Application):
     # 确认连接
     bot_info = await application.bot.get_me()
     logger.info(f"Bot connected: @{bot_info.username} (ID: {bot_info.id})")
+
+    # ---------------------------------------------------------
+    # 注册 NewsPush Service 定时任务
+    # ---------------------------------------------------------
+    if application.job_queue:
+        # 每 3600 秒 (1小时) 运行一次
+        # first=60: 启动后 60 秒首次运行
+        application.job_queue.run_repeating(
+            news_push_service.run_push_loop, 
+            interval=3600, 
+            first=60, 
+            name="news_push_loop"
+        )
+        logger.info("NewsPush: Scheduler registered (Interval: 3600s)")
+    else:
+        logger.warning("NewsPush: JobQueue not available!")
 
 def run_bot():
     """启动 Bot"""

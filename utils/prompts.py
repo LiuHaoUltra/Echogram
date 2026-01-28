@@ -106,4 +106,58 @@ Telegram 仅支持特定标准表情。**请优先使用符合你当前情绪的
         # 最终组装
         return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol}"
 
+
+    AGENTIC_FILTER_TEMPLATE = """你是一个严苛的新闻过滤器。
+任务：判断这条新闻是否值得推送给一个关注【技术、开发、ACG、极客文化】的群组。
+
+判断标准：
+1. **PASS (不通过)**：营销广告、单纯的版本号无意义更新、无聊的流水账、政治敏感、与科技/ACG完全无关的社会新闻。
+2. **YES (通过)**：
+   - 重大技术突破 (AI, 编程语言, 框架)
+   - 有趣的开源项目 (GitHub, HuggingFace)
+   - 热门 ACG 话题 (游戏, 动画, 模玩)
+   - 高质量的技术文章或深度观点
+3. **宽容原则**：如果不确定，且内容看起来有趣/极客，请选择 YES。
+
+输出规则：
+- 仅输出 `YES` 或 `NO`。不要输出任何其他内容。"""
+
+    AGENTIC_SPEAKER_USER_TEMPLATE = """请把这条新闻分享给群友。
+新闻来源: {source_name}
+标题: {title}
+内容摘要: {content}...
+{memory_context}
+
+要求：
+1. 用你一贯的口语化风格（参考 System Prompt），写一段自然的分享语。
+2. 必须结合 [群组长期记忆]（如果有），比如：“@User 之前提到的...”
+3. 不要包含链接（我会补）。不要废话。"""
+
+    @classmethod
+    def build_agentic_filter_messages(cls, title: str, content: str) -> list[dict]:
+        """
+        Step 1: 价值过滤
+        """
+        user_content = f"标题: {title}\n内容: {content}..."
+        return [
+            {"role": "system", "content": cls.AGENTIC_FILTER_TEMPLATE},
+            {"role": "user", "content": user_content}
+        ]
+
+    @classmethod
+    def build_agentic_speaker_messages(cls, system_prompt: str, source_name: str, title: str, content: str, memory_context: str = "") -> list[dict]:
+        """
+        Step 2: 文案生成 (注入 RAG)
+        """
+        user_content = cls.AGENTIC_SPEAKER_USER_TEMPLATE.format(
+            source_name=source_name,
+            title=title,
+            content=content,
+            memory_context=memory_context
+        )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ]
+
 prompt_builder = PromptBuilder()

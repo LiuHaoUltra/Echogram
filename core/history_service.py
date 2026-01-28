@@ -102,4 +102,14 @@ class HistoryService:
             history = result.scalars().all()
             return list(reversed(history))
 
+    async def get_last_message_time(self, chat_id: int):
+        """获取最近一条消息的时间"""
+        async for session in get_db_session():
+            stmt = select(History.timestamp)\
+                .where(History.chat_id == chat_id)\
+                .order_by(History.timestamp.desc())\
+                .limit(1)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
 history_service = HistoryService()
