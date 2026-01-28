@@ -194,12 +194,16 @@ async def save_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     route = parts[0].strip()
     name = parts[1].strip()
     
-    # Auto-bind to current chat
+    # Auto-bind only if in Group context
+    from telegram.constants import ChatType
+    is_private = update.effective_chat.type == ChatType.PRIVATE
+    bind_id = update.effective_chat.id if not is_private else None
+    
     from core.news_push_service import news_push_service
-    success = await news_push_service.add_subscription(route, name, bind_chat_id=update.effective_chat.id)
+    success = await news_push_service.add_subscription(route, name, bind_chat_id=bind_id)
     
     if success:
-        # Get ID for the button
+        # ... (Get ID logic) ...
         from sqlalchemy import select
         from models.news import NewsSubscription
         from config.database import get_db_session
@@ -216,8 +220,14 @@ async def save_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔙 返回列表", callback_data="list_subs")]
         ]
         
+        msg_text = f"✅ 订阅源 '{name}' 添加成功！\n"
+        if bind_id:
+            msg_text += "已自动绑定到当前群组。\n"
+        else:
+            msg_text += "请点击下方按钮配置分发对象。\n"
+            
         await update.message.reply_text(
-            f"✅ 订阅源 '{name}' 添加成功！\n已自动绑定到当前群组。\n\n请点击下方按钮确认分发范围：", 
+            msg_text,
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
