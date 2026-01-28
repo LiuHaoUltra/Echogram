@@ -19,15 +19,15 @@ class NewsPushService:
     周期性唤醒 -> 感知(RSS) -> 过滤(Filter) -> 按需分发(Dispatch) -> 生成(Speaker) -> 推送
     """
 
-    async def run_push_loop(self, context: ContextTypes.DEFAULT_TYPE):
+    async def run_push_loop(self, context: ContextTypes.DEFAULT_TYPE, force: bool = False):
         """
         核心循环入口
         Logic: Loop Subs -> Fetch -> Global Filter -> Loop Linked Chats -> Speak -> Send
         """
-        logger.info("NewsPush: Waking up...")
+        logger.info(f"NewsPush: Waking up... (Force={force})")
 
         # 1. 环境检查
-        if not await self._is_active_hours():
+        if not force and not await self._is_active_hours():
             logger.info("NewsPush: Sleeping hours. Going back to sleep.")
             return
 
@@ -91,7 +91,7 @@ class NewsPushService:
                 
                 for chat_id in linked_chat_ids:
                     # F. Chat Idle Check
-                    if not await self._is_chat_idle(chat_id):
+                    if not force and not await self._is_chat_idle(chat_id):
                         logger.info(f"NewsPush: Chat {chat_id} is busy. Skipping.")
                         continue
                         

@@ -65,7 +65,7 @@ def run_bot():
     from core.admin_handlers import (
         reset_command, stats_command, prompt_command, 
         debug_command, add_whitelist_command, remove_whitelist_command,
-        sub_command
+        sub_command, push_now_command
     )
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("stats", stats_command))
@@ -74,6 +74,7 @@ def run_bot():
     application.add_handler(CommandHandler("add_whitelist", add_whitelist_command))
     application.add_handler(CommandHandler("remove_whitelist", remove_whitelist_command))
     application.add_handler(CommandHandler("sub", sub_command))
+    application.add_handler(CommandHandler("push_now", push_now_command))
     
     # 聊天引擎处理器 (低优先级)
     from telegram.ext import MessageHandler, filters

@@ -304,3 +304,21 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Sub command failed: {e}")
         await update.message.reply_text(f"❌ 系统错误: {e}")
+
+async def push_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /push_now 指令：强制触发一次新闻推送检查 (忽略时间/闲置限制)
+    """
+    user = update.effective_user
+    if not is_admin(user.id): return
+
+    await update.message.reply_text("🚀 正在强制执行 NewsPush 检查...\n(忽略 Active Hours 与 Idle Check)")
+    from core.news_push_service import news_push_service
+    
+    # Force run
+    try:
+        await news_push_service.run_push_loop(context, force=True)
+        await update.message.reply_text("✅ 检查循环执行完毕。请观察群组消息。")
+    except Exception as e:
+        logger.error(f"Push Now Failed: {e}")
+        await update.message.reply_text(f"❌ 执行出错: {e}")
