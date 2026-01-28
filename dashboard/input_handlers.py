@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from core.config_service import config_service
 from core.access_service import access_service
 from dashboard.keyboards import get_main_menu_keyboard, get_persona_keyboard, get_access_control_keyboard, get_api_settings_keyboard, get_memory_keyboard, get_cancel_keyboard
-from dashboard.states import WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME, WAITING_INPUT_SYSTEM_PROMPT
+from dashboard.states import WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME, WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_TEMPERATURE
 from dashboard.handlers import get_dashboard_overview_text
 
 async def _try_delete_previous_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
@@ -167,4 +167,23 @@ async def save_history_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(overview, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
     except ValueError:
         await update.message.reply_text(f"❌ 输入无效，必须是整数。", reply_markup=get_memory_keyboard())
+    return ConversationHandler.END
+
+async def save_temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    try:
+        val = float(text)
+        if val < 0.0 or val > 1.0:
+             await update.message.reply_text(f"❌ 范围错误，请输入 0.0 ~ 1.0 之间的数字。", reply_markup=get_persona_keyboard())
+             return ConversationHandler.END
+        
+        await config_service.set_value("temperature", str(val))
+        await config_service.set_value("temperature", str(val))
+        await update.message.reply_text(f"✅ 采样温度 (Temperature) 已更新为: {val}")
+        
+        overview = await get_dashboard_overview_text(update.effective_chat.id)
+        await update.message.reply_text(overview, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+    except ValueError:
+        await update.message.reply_text(f"❌ 输入无效，必须是数字。", reply_markup=get_persona_keyboard())
     return ConversationHandler.END

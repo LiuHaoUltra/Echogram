@@ -61,7 +61,7 @@ class LazySender:
 
         # 开启新计时器
         buffer['task'] = asyncio.create_task(self._wait_and_flush(chat_id, idle_wait))
-        logger.debug(f"LazySender: Scheduled flush for Chat {chat_id} in {idle_wait}s")
+        logger.info(f"LazySender: Scheduled flush for Chat {chat_id} in {idle_wait}s")
 
     async def _wait_and_flush(self, chat_id: int, delay: float):
         """等待静默时间结束，然后发送"""

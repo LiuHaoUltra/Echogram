@@ -158,9 +158,16 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         else:
             messages.append({"role": "assistant", "content": h.content})
         
+    # 获取 Temperature (默认 0.7)
+    temp_str = configs.get("temperature", "0.7")
+    try:
+        current_temp = float(temp_str)
+    except:
+        current_temp = 0.7
+
     # 调用 API
     msg_count = len(messages)
-    logger.debug(f"Calling LLM ({model}) with {msg_count} messages...")
+    logger.info(f"Calling LLM ({model}) with {msg_count} msgs, Temp: {current_temp}")
     
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
@@ -168,7 +175,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=0.7
+            temperature=current_temp
         )
         
         if not response.choices or not response.choices[0].message.content:
@@ -181,16 +188,30 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
         # 1. 响应隔离与指令解析 (Tag-Driven Protocol)
         # 提取所有 <chat> 标签及其属性/内容
-        # 格式：<chat reply="123" react="👍">内容</chat>
+        # 格式：<chat reply="123"        # 1. 解析回复结构
         tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
         matches = list(re.finditer(tag_pattern, reply_content, flags=re.DOTALL))
         
+        # 表情白名单 (用于过滤与清洗)
+        TG_FREE_REACTIONS = {
+            "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", 
+            "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊️", "🤡", 
+            "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", 
+            "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", 
+            "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", 
+            "🤝", "✍️", "🤗", "🫡", "🎅", "🎄", "☃️", "💅", "🤪", "🗿", 
+            "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️", 
+            "🤷", "🤷‍♀️", "😡"
+        }
+
+        reply_blocks = []
+        cleaned_history_parts = []
+
         if not matches:
-             logger.warning("Response Protocol Violation: No <chat> tags found in LLM output.")
-             # 防御性处理：如果没有标签，尝试发送原始响应（或清洗后的）
-             reply_blocks = [{"content": reply_content.strip(), "reply": None, "react": None}]
+             # 如果根本没标签，尝试当作纯文本处理 (兜底)
+             reply_blocks.append({"content": reply_content, "reply": None, "react": None})
+             cleaned_history_parts.append(f"<chat>{reply_content}</chat>")
         else:
-             reply_blocks = []
              for m in matches:
                  attrs_raw = m.group("attrs")
                  content = m.group("content").strip()
@@ -208,6 +229,22 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                  if react_match:
                      react_emoji = react_match.group(1).strip()
                  
+                 # --- [清洗逻辑] 预校验表情是否合法 ---
+                 valid_react_for_history = None
+                 if react_emoji:
+                     emoji_to_check = react_emoji.split(":")[0].strip() if ":" in react_emoji else react_emoji
+                     if emoji_to_check in TG_FREE_REACTIONS:
+                         valid_react_for_history = react_emoji
+                     else:
+                         logger.warning(f"Reaction purified from history: '{emoji_to_check}'")
+                 
+                 # 构建清洗后的标签用于保存到数据库
+                 attr_str = ""
+                 if reply_id: attr_str += f' reply="{reply_id}"'
+                 if valid_react_for_history: attr_str += f' react="{valid_react_for_history}"'
+                 
+                 cleaned_history_parts.append(f"<chat{attr_str}>{content}</chat>")
+
                  if content or react_emoji:
                      reply_blocks.append({
                          "content": content if content else "...",
@@ -215,17 +252,9 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                          "react": react_emoji
                      })
 
-        # 2. 回复发送逻辑
-        TG_FREE_REACTIONS = {
-            "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", 
-            "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊️", "🤡", 
-            "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯", "🤣", "🍴", 
-            "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", 
-            "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍️", 
-            "🤗", "🫡", "🎅", "🎄", "☃️", "💅", "🤪", "🗿", "🆒", "💘", 
-            "🙊", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️", "🤷", "🤷‍♀️", "😡"
-        }
+        cleaned_reply_content = "\n".join(cleaned_history_parts)
 
+        # 2. 回复发送逻辑
         for i, block in enumerate(reply_blocks):
             content = block["content"]
             target_reply_id = block["reply"]
@@ -299,8 +328,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
         
-        # 保存 AI 回复
-        await history_service.add_message(chat_id, "assistant", reply_content)
+        # 保存 AI 回复 (保存清洗后的内容)
+        await history_service.add_message(chat_id, "assistant", cleaned_reply_content)
         
         # 触发后台总结
         try:

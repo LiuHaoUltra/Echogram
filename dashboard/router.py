@@ -13,7 +13,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配入口按钮
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -41,7 +41,8 @@ def get_dashboard_handlers():
             WAITING_INPUT_SYSTEM_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_system_prompt)],
             WAITING_INPUT_WHITELIST_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.add_whitelist_id)],
             WAITING_INPUT_WHITELIST_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.remove_whitelist_id)],
-            WAITING_INPUT_HISTORY_TOKENS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_history_tokens)]
+            WAITING_INPUT_HISTORY_TOKENS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_history_tokens)],
+            WAITING_INPUT_TEMPERATURE: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_temperature)]
         },
         fallbacks=[
             CommandHandler("dashboard", dashboard_command),

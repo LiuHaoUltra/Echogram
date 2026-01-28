@@ -32,12 +32,12 @@ class SummaryService:
             result = await session.execute(stmt)
             summary = result.scalar_one_or_none()
             if summary:
-                logger.debug(f"Summary status found for {chat_id}: last_id={summary.last_summarized_msg_id}")
+                logger.info(f"Summary status found for {chat_id}: last_id={summary.last_summarized_msg_id}")
                 return {
                     "last_id": summary.last_summarized_msg_id,
                     "updated_at": summary.updated_at
                 }
-            logger.debug(f"Summary status NOT found for {chat_id}")
+            logger.info(f"Summary status NOT found for {chat_id}")
             return {"last_id": 0, "updated_at": None}
 
     async def clear_summary(self, chat_id: int):
@@ -59,7 +59,7 @@ class SummaryService:
         触发检查 (Fire-and-forget)
         """
         if chat_id in self._processing: 
-            logger.debug(f"Summary check skipped for {chat_id}: Already processing.")
+            logger.info(f"Summary check skipped for {chat_id}: Already processing.")
             return
 
         # 防抖 (5s)
@@ -67,7 +67,7 @@ class SummaryService:
         last_time = self._last_check.get(chat_id, 0)
         cooldown = 5
         if now - last_time < cooldown:
-            logger.debug(f"Summary check skipped for {chat_id}: Cooldown ({int(now - last_time)}s < {cooldown}s).")
+            logger.info(f"Summary check skipped for {chat_id}: Cooldown ({int(now - last_time)}s < {cooldown}s).")
             return
 
         self._processing.add(chat_id)
@@ -126,7 +126,7 @@ class SummaryService:
             buffer_msgs = [m for m in reversed(all_msgs) if last_id < m.id < win_start_id]
             
             if not buffer_msgs:
-                logger.debug(f"Summary Check for {chat_id}: Buffer is empty (All messages are in Active Window).")
+                logger.info(f"Summary Check for {chat_id}: Buffer is empty (All messages are in Active Window).")
                 return
 
             text_buffer = ""

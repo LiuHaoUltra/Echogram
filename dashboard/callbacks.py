@@ -16,7 +16,7 @@ from dashboard.keyboards import (
 from dashboard.states import (
     WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME,
     WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_WHITELIST_ADD, WAITING_INPUT_WHITELIST_REMOVE,
-    WAITING_INPUT_SUMMARY_MODEL, WAITING_INPUT_HISTORY_TOKENS
+    WAITING_INPUT_SUMMARY_MODEL, WAITING_INPUT_HISTORY_TOKENS, WAITING_INPUT_TEMPERATURE
 )
 from dashboard.model_handlers import show_model_selection_panel
 
@@ -100,6 +100,24 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(text="请输入新的 <b>System Prompt</b>:", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
         context.user_data['last_panel_id'] = query.message.message_id
         return WAITING_INPUT_SYSTEM_PROMPT
+
+    if data == "set_temperature":
+        current_val = await config_service.get_value("temperature", "0.7")
+        await query.edit_message_text(
+            text=(
+                f"🔥 <b>调整采样温度 (Temperature)</b>\n\n"
+                f"当前值: <code>{current_val}</code>\n\n"
+                "此参数决定回复的<b>随机性</b>：\n"
+                "• <b>0.0 - 0.3</b>：稳定且理性，适合逻辑处理。\n"
+                "• <b>0.7 - 0.8</b>：默认值，兼顾连贯与创造力。\n"
+                "• <b>0.9 - 1.0</b>：极其发散，可能胡言乱语。\n\n"
+                "请输入 0.0 ~ 1.0 之间的数字："
+            ),
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        return WAITING_INPUT_TEMPERATURE
 
     # --- 3. 访问控制 ---
     if data == "menu_access":

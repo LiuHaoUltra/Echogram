@@ -30,6 +30,7 @@ def get_api_settings_keyboard() -> InlineKeyboardMarkup:
 def get_persona_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📝 修改 System Prompt", callback_data="set_sys_prompt")],
+        [InlineKeyboardButton("🔥 调整 Temperature", callback_data="set_temperature")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
