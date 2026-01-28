@@ -27,7 +27,7 @@ class NewsPushService:
         logger.info("NewsPush: Waking up...")
 
         # 1. 环境检查
-        if not self._is_active_hours():
+        if not await self._is_active_hours():
             logger.info("NewsPush: Sleeping hours. Going back to sleep.")
             return
 

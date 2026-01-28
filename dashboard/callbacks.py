@@ -297,6 +297,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         from core.news_push_service import news_push_service
         from models.news import ChatSubscription
         from sqlalchemy import delete
+        from config.database import get_db_session
         
         parts = data.split(":")
         sub_id = int(parts[1])
