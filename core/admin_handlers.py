@@ -256,3 +256,51 @@ async def remove_whitelist_command(update: Update, context: ContextTypes.DEFAULT
     await access_service.remove_whitelist(chat.id)
     
     await update.message.reply_text(f"🗑️ 已将本会话 (<code>{chat.id}</code>) 从白名单中移除。", parse_mode='HTML')
+
+async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /sub 指令：快速添加订阅并绑定到当前群组
+    用法: /sub <rss_route> <name>
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    if not is_admin(user.id):
+        return
+    if chat.type == constants.ChatType.PRIVATE:
+        await update.message.reply_text("⚠️ 请在群组中使用，以便自动绑定目标群组。私聊请使用 Dashboard。")
+        return
+
+    # Args check
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ 用法错误。\n格式: <code>/sub &lt;RSS路由&gt; &lt;名称&gt;</code>\n示例: <code>/sub /telegram/channel/tginfo TG Info</code>",
+            parse_mode='HTML'
+        )
+        return
+
+    route = context.args[0]
+    name = " ".join(context.args[1:])
+
+    # Check whitelist first
+    from core.access_service import access_service
+    if not await access_service.is_chat_whitelisted(chat.id):
+        await update.message.reply_text("⚠️ 当前群组未在白名单中。请先发送 /add_whitelist 添加。", parse_mode='HTML')
+        return
+
+    # Add & Bind
+    from core.news_push_service import news_push_service
+    try:
+        # news_push_service.add_subscription handles Creation + Binding (Idempotent)
+        success = await news_push_service.add_subscription(route, name, bind_chat_id=chat.id)
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ 订阅成功！\n\n<b>源名称:</b> {name}\n<b>路由:</b> <code>{route}</code>\n<b>已绑定:</b> {chat.title}", 
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text("❌ 订阅失败，请检查日志或路由格式。")
+    except Exception as e:
+        logger.error(f"Sub command failed: {e}")
+        await update.message.reply_text(f"❌ 系统错误: {e}")

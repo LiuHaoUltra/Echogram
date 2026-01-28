@@ -11,7 +11,7 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🧹 记忆管理", callback_data="menu_memory")
         ],
         [
-            InlineKeyboardButton("🤖 Agentic Soul (自主意识)", callback_data="menu_agentic")
+            InlineKeyboardButton("📺 主动消息 (Active Push)", callback_data="menu_agentic")
         ],
         [
             InlineKeyboardButton("❌ 关闭面板", callback_data="close_dashboard")

@@ -62,6 +62,19 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
 
     latency = configs.get("aggregation_latency", "10.0")
 
+    # News Push Stats
+    from core.news_push_service import news_push_service
+    subs = await news_push_service.get_all_subscriptions()
+    total_subs = len(subs)
+    error_subs = sum(1 for s in subs if s.status == 'error')
+    active_subs = sum(1 for s in subs if s.is_active)
+    
+    news_status = "✅ All Good"
+    if error_subs > 0:
+        news_status = f"❌ {error_subs} Errors"
+    elif total_subs == 0:
+        news_status = "⏸️ No Feeds"
+
     return (
         "<b>Echogram 控制中心</b>\n\n"
         "📊 <b>系统参数</b>\n"
@@ -69,7 +82,10 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
         f"• Main Model: <code>{model}</code>\n"
         f"• Summary Model: {summary_model_disp}\n"
         f"• Aggregation Latency: <code>{latency} s</code>\n"
-        f"• Memory & Archiving Threshold (T): <code>{configs.get('history_tokens', str(settings.HISTORY_WINDOW_TOKENS))} tokens</code>\n\n"
+        f"• Memory Threshold: <code>{configs.get('history_tokens', str(settings.HISTORY_WINDOW_TOKENS))} tokens</code>\n\n"
+        "📺 <b>主动消息 (Active Push)</b>\n"
+        f"• Feeds: {total_subs} (Active: {active_subs})\n"
+        f"• Health: {news_status}\n\n"
         "请选择配置项："
     )
 

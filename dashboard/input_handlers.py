@@ -194,14 +194,34 @@ async def save_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
     route = parts[0].strip()
     name = parts[1].strip()
     
-    from core.news_push_service import news_push_service
     # Auto-bind to current chat
+    from core.news_push_service import news_push_service
     success = await news_push_service.add_subscription(route, name, bind_chat_id=update.effective_chat.id)
     
-    from dashboard.keyboards import get_agentic_keyboard
     if success:
-        await update.message.reply_text(f"✅ 订阅源 '{name}' 添加成功！\n已自动绑定到当前群组 (ID: {update.effective_chat.id})。", reply_markup=get_agentic_keyboard())
+        # Get ID for the button
+        from sqlalchemy import select
+        from models.news import NewsSubscription
+        from config.database import get_db_session
+        
+        sub_id = None
+        async for session in get_db_session():
+            r = await session.execute(select(NewsSubscription).where(NewsSubscription.route == route))
+            obj = r.scalar_one_or_none()
+            if obj: sub_id = obj.id
+            
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = [
+            [InlineKeyboardButton("🎯 配置分发对象 (Manage Targets)", callback_data=f"manage_targets:{sub_id}")],
+            [InlineKeyboardButton("🔙 返回列表", callback_data="list_subs")]
+        ]
+        
+        await update.message.reply_text(
+            f"✅ 订阅源 '{name}' 添加成功！\n已自动绑定到当前群组。\n\n请点击下方按钮确认分发范围：", 
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     else:
+        from dashboard.keyboards import get_agentic_keyboard
         await update.message.reply_text(f"❌ 添加失败，可能路由已存在或格式错误。", reply_markup=get_agentic_keyboard())
         
     return ConversationHandler.END

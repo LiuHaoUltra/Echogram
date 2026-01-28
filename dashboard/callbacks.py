@@ -202,7 +202,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     # --- 5. 新闻推送 (News Push) 管理 ---
     if data == "menu_agentic":
         from dashboard.keyboards import get_agentic_keyboard
-        await query.edit_message_text(text="<b>📺 新闻推送 (News Push)</b>", reply_markup=get_agentic_keyboard(), parse_mode="HTML")
+        await query.edit_message_text(text="<b>📺 主动消息 (Active Push)</b>", reply_markup=get_agentic_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
 
     if data == "list_subs":
