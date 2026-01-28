@@ -295,8 +295,9 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
 
     if data.startswith("toggle_target:"):
         from core.news_push_service import news_push_service
-        from models.news import ChatSubscription
-        from sqlalchemy import delete
+        from core.access_service import access_service
+        from models.news import ChatSubscription, NewsSubscription
+        from sqlalchemy import delete, select
         from config.database import get_db_session
         
         parts = data.split(":")
