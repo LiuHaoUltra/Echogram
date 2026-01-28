@@ -276,6 +276,11 @@ class NewsPushService:
             await asyncio.sleep(typing_seconds)
             await context.bot.send_message(chat_id=chat_id, text=content)
             await history_service.add_message(chat_id, "assistant", content)
+            
+            # Auto-Archive: Prevent memory pollution
+            from core.summary_service import summary_service
+            await summary_service.check_and_summarize(chat_id)
+            
         except Exception as e:
             logger.error(f"NewsPush: Failed to send to {chat_id}: {e}")
 

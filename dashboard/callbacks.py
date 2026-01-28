@@ -257,6 +257,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         
     if data.startswith("manage_targets:"):
         from core.news_push_service import news_push_service
+        from core.access_service import access_service
         from sqlalchemy import select
         from models.news import NewsSubscription, ChatSubscription
         from config.database import get_db_session
