@@ -16,6 +16,7 @@ from dashboard.keyboards import (
 from dashboard.states import (
     WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME,
     WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_WHITELIST_ADD, WAITING_INPUT_WHITELIST_REMOVE,
+    WAITING_INPUT_AGGREGATION_LATENCY,
     WAITING_INPUT_SUMMARY_MODEL, WAITING_INPUT_HISTORY_TOKENS, WAITING_INPUT_TEMPERATURE
 )
 from dashboard.model_handlers import show_model_selection_panel
@@ -70,15 +71,11 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "set_summary_model":
         await show_model_selection_panel(update, context, target="summary")
         return WAITING_INPUT_SUMMARY_MODEL
-        
-    if data == "set_summary_model":
-        await show_model_selection_panel(update, context, target="summary")
-        return WAITING_INPUT_SUMMARY_MODEL
     
     if data == "set_aggregation_latency":
         current_val = await config_service.get_value("aggregation_latency", "10")
         await query.edit_message_text(
-            text=f"请输入新的 <b>聚合延迟 (秒)</b>:\n当前值: {current_val} s\n(建议 3-10 秒)", 
+            text=f"请输入新的 <b>聚合延迟 (秒)</b>:\n当前值: {current_val} s\n(建议 5-20 秒)", 
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )

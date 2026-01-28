@@ -24,7 +24,6 @@ async def save_api_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return WAITING_INPUT_API_URL
         
     await config_service.set_value("api_base_url", text)
-    await config_service.set_value("api_base_url", text)
     await update.message.reply_text(f"✅ Base URL 已更新为: {text}")
     
     # 刷新面板
@@ -44,7 +43,6 @@ async def save_api_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
     await config_service.set_value("api_key", text)
-    await config_service.set_value("api_key", text)
     await update.message.reply_text(f"✅ API Key 已更新。")
     
     overview = await get_dashboard_overview_text(update.effective_chat.id)
@@ -58,7 +56,6 @@ async def save_model_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
          await update.message.reply_text("❌ 模型名称太短。", reply_markup=get_cancel_keyboard())
          return WAITING_INPUT_MODEL_NAME
 
-    await config_service.set_value("model_name", text)
     await config_service.set_value("model_name", text)
     await update.message.reply_text(f"✅ Model Name 已更新为: {text}")
     
@@ -75,7 +72,6 @@ async def save_aggregation_latency(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text(f"❌ 范围错误，请输入 0.1 ~ 60 之间的数字。", reply_markup=get_api_settings_keyboard())
             return ConversationHandler.END
             
-        await config_service.set_value("aggregation_latency", str(val))
         await config_service.set_value("aggregation_latency", str(val))
         await update.message.reply_text(f"✅ 聚合延迟已更新为: {val} 秒")
         
@@ -94,7 +90,6 @@ async def save_system_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return WAITING_INPUT_SYSTEM_PROMPT
 
     await config_service.set_value("system_prompt", text)
-    await config_service.set_value("system_prompt", text)
     await update.message.reply_text(f"✅ System Prompt 已更新。")
     
     overview = await get_dashboard_overview_text(update.effective_chat.id)
@@ -107,7 +102,6 @@ async def add_whitelist_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     try:
         chat_id = int(text)
-        await access_service.add_whitelist(chat_id=chat_id, type_="manual")
         await access_service.add_whitelist(chat_id=chat_id, type_="manual")
         await update.message.reply_text(f"✅ ID {chat_id} 已添加到白名单。")
         
@@ -122,7 +116,6 @@ async def remove_whitelist_id(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text.strip()
     try:
         chat_id = int(text)
-        await access_service.remove_whitelist(chat_id=chat_id)
         await access_service.remove_whitelist(chat_id=chat_id)
         await update.message.reply_text(f"✅ ID {chat_id} 已从白名单移除。")
         
@@ -160,7 +153,6 @@ async def save_history_tokens(update: Update, context: ContextTypes.DEFAULT_TYPE
              return ConversationHandler.END
         
         await config_service.set_value("history_tokens", str(val))
-        await config_service.set_value("history_tokens", str(val))
         await update.message.reply_text(f"✅ 历史记录 Token 上限已更新为: {val}")
         
         overview = await get_dashboard_overview_text(update.effective_chat.id)
@@ -178,7 +170,6 @@ async def save_temperature(update: Update, context: ContextTypes.DEFAULT_TYPE):
              await update.message.reply_text(f"❌ 范围错误，请输入 0.0 ~ 1.0 之间的数字。", reply_markup=get_persona_keyboard())
              return ConversationHandler.END
         
-        await config_service.set_value("temperature", str(val))
         await config_service.set_value("temperature", str(val))
         await update.message.reply_text(f"✅ 采样温度 (Temperature) 已更新为: {val}")
         
