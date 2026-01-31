@@ -20,12 +20,20 @@ class NewsPushService:
     周期性唤醒 -> 感知(RSS) -> 过滤(Filter) -> 按需分发(Dispatch) -> 生成(Speaker) -> 推送
     """
 
+    def __init__(self):
+        self._lock = asyncio.Lock()
+
     async def run_push_loop(self, context: ContextTypes.DEFAULT_TYPE, force: bool = False):
         """
         核心循环入口
         Logic: Loop Subs -> Fetch -> Global Filter -> Loop Linked Chats -> Speak -> Send
         """
-        logger.info(f"NewsPush: Waking up... (Force={force})")
+        if self._lock.locked():
+            logger.warning("NewsPush: Loop is already running. Skipping this trigger.")
+            return
+
+        async with self._lock:
+            logger.info(f"NewsPush: Waking up... (Force={force})")
 
         # 1. 环境检查
         if not force and not await self._is_active_hours():

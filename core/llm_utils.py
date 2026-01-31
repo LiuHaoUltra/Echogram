@@ -28,7 +28,7 @@ async def fetch_available_models():
         logger.error(f"Failed to fetch models: {e}")
         return False, str(e)
 
-async def simple_chat(model: str, messages: list, temperature: float = 0.7) -> str:
+async def simple_chat(model: str, messages: list, temperature: float = 0.7, max_tokens: int = 2000) -> str:
     """
     通用 LLM 调用接口
     """
@@ -45,7 +45,8 @@ async def simple_chat(model: str, messages: list, temperature: float = 0.7) -> s
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=temperature
+            temperature=temperature,
+            max_tokens=max_tokens
         )
         return response.choices[0].message.content or ""
     except Exception as e:

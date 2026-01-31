@@ -192,6 +192,6 @@ class SummaryService:
         ]
 
         target_model = model_name or settings.SUMMARY_MODEL
-        return await simple_chat(target_model, messages, temperature=0.3)
+        return await simple_chat(target_model, messages, temperature=0.3, max_tokens=1000)
 
 summary_service = SummaryService()

@@ -154,7 +154,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=current_temp
+            temperature=current_temp,
+            max_tokens=4000
         )
         
         if not response.choices or not response.choices[0].message.content:
