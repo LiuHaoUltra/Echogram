@@ -5,77 +5,53 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from config.settings import settings
 from utils.logger import logger
+from core.telegram_channel_scraper import TelegramChannelScraper
 
 class NewsService:
     """
-    新闻服务：负责从 RSSHub 获取并清洗数据
+    新闻服务：负责从 Telegram Channel 获取并清洗数据
     """
 
     @staticmethod
     async def fetch_new_items(route: str, last_time: datetime) -> List[Dict]:
         """
-        获取指定订阅源的新增条目
-        :param route: RSSHub 路由 (e.g., /telegram/channel/tginfo)
+        获取指定 Telegram Channel 的新增条目
+        :param route: Channel 用户名 (如 tginfo) 或旧格式路由 (/telegram/channel/tginfo)
         :param last_time: 上次读取的时间 (Naive UTC)
         :return: 清洗后的条目列表
         """
-        url = f"{settings.RSSHUB_HOST}{route}"
-        params = {"format": "json"}
+        # 兼容旧格式：提取 channel username
+        channel_username = NewsService._extract_channel_username(route)
         
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                data = response.json()
-                
-            items = data.get("items", [])
-            logger.info(f"NewsService: Fetched {len(items)} items from RSSHub (Route: {route})")
-            new_items = []
-            
-            # 确保 last_time 有时区信息以便比较 (假设为 UTC)
-            if last_time.tzinfo is None:
-                last_time = last_time.replace(tzinfo=timezone.utc)
-
-            for item in items:
-                # 解析发布时间
-                pub_date_str = item.get("date_published")
-                if not pub_date_str:
-                    continue
-                
-                try:
-                    pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
-                except ValueError:
-                    logger.warning(f"NewsService: Failed to parse date: {pub_date_str}")
-                    continue
-
-                if pub_date <= last_time:
-                    continue
-
-                # 清洗内容
-                clean_content = NewsService._clean_html(item.get("content_html", ""))
-                
-                new_items.append({
-                    "title": item.get("title", ""),
-                    "content": clean_content,
-                    "url": item.get("url", ""),
-                    "date_published": pub_date
-                })
-            
-            # 按时间正序排列 (旧 -> 新)
-            new_items.sort(key=lambda x: x["date_published"])
+            # 使用新的 Telegram Channel Scraper
+            new_items = await TelegramChannelScraper.scrape_channel(channel_username, last_time)
+            logger.info(f"NewsService: Fetched {len(new_items)} new items from Channel: {channel_username}")
             return new_items
 
-        except httpx.HTTPError as e:
-            logger.error(f"Error fetching news from {route}: {e}")
-            return []
         except Exception as e:
-            logger.error(f"Unexpected error in fetch_new_items: {e}")
+            logger.error(f"NewsService: Unexpected error in fetch_new_items: {e}", exc_info=True)
             return []
+    
+    @staticmethod
+    def _extract_channel_username(route: str) -> str:
+        """
+        从 route 提取 channel username
+        兼容旧格式: /telegram/channel/tginfo -> tginfo
+        新格式: tginfo -> tginfo
+        """
+        if route.startswith('/'):
+            # 旧 RSSHub 格式: /telegram/channel/tginfo
+            parts = route.strip('/').split('/')
+            return parts[-1]  # 取最后一段
+        else:
+            # 新格式，直接就是 username
+            return route.strip()
 
     @staticmethod
     def _clean_html(raw_html: str) -> str:
         """
-        移除 HTML 标签，仅保留文本
+        移除 HTML 标签，仅保留文本 (备用方法)
         """
         if not raw_html:
             return ""

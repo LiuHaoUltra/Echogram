@@ -356,9 +356,9 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "add_sub_request":
         await query.edit_message_text(
             text=(
-                "请输入 RSSHub 路由和名称。\n"
-                "格式: <code>路由|名称</code>\n"
-                "示例: <code>/telegram/channel/tginfo|TG Info</code>"
+                "请输入 Telegram Channel 用户名和名称。\n"
+                "格式: <code>用户名|名称</code>\n"
+                "示例: <code>tginfo|TG Info</code>"
             ),
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"

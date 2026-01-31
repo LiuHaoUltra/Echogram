@@ -21,16 +21,13 @@ class Settings:
     # 记忆系统
     # 窗口大小 (Token)
     HISTORY_WINDOW_TOKENS = int(os.getenv("HISTORY_WINDOW_TOKENS", 6000))
-    # 触发阈值 (Token)
-    SUMMARY_TRIGGER_TOKENS = int(os.getenv("SUMMARY_TRIGGER_TOKENS", 2000))
-    # 闲置阈值 (秒)
-    SUMMARY_IDLE_SECONDS = int(os.getenv("SUMMARY_IDLE_SECONDS", 10800))
-    # 摘要模型
+    
+    # OpenAI API
+    OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
     SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
-
-    # RSSHub
-    RSSHUB_HOST = os.getenv("RSSHUB_HOST", "http://rsshub:1200")
-
+    
     @classmethod
     def validate(cls):
         if not cls.TG_BOT_TOKEN:

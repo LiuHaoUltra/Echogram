@@ -10,7 +10,7 @@ class NewsSubscription(Base):
     __tablename__ = "news_subscriptions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    route: Mapped[str] = mapped_column(String(255), unique=True, comment="RSSHub 路由")
+    route: Mapped[str] = mapped_column(String(255), unique=True, comment="Telegram Channel 用户名 (如 tginfo) 或旧格式兼容")
     name: Mapped[str] = mapped_column(String(50), comment="订阅源名称/备注")
     last_publish_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, comment="最新一条已处理新闻的发布时间")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, comment="是否启用")
