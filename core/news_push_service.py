@@ -12,6 +12,7 @@ from core.access_service import access_service
 from core.history_service import history_service
 from core.llm_utils import simple_chat
 from utils.logger import logger
+from core.sender_service import sender_service # 修复：移动到全局作用域
 
 class NewsPushService:
     """
@@ -32,13 +33,12 @@ class NewsPushService:
             return
 
         # 2. 获取所有启用的订阅源
+        subscriptions = []
         async for session in get_db_session():
             stmt = select(NewsSubscription).where(NewsSubscription.is_active == True)
             result = await session.execute(stmt)
             subscriptions = result.scalars().all()
-            
-            # Detach for async processing
-            pass
+            # 这里的 scalars() 会执行查询并将结果存入内存
 
         if not subscriptions:
             logger.info("NewsPush: No active subscriptions.")
@@ -48,39 +48,35 @@ class NewsPushService:
             # --- Per Subscription Process ---
             try:
                 # A. Fetch
-                # 修正 last_publish_time 时区
                 last_time = sub.last_publish_time
                 if last_time.tzinfo is None:
                     last_time = last_time.replace(tzinfo=timezone.utc)
 
                 fetched_items = await NewsService.fetch_new_items(sub.route, last_time)
                 
-                # B. Update Status (Success)
+                # B. Update Status
                 await self._update_sub_status(sub.id, "normal", error=None)
                 
                 if not fetched_items:
+                    # 只有在非强制模式下才静默，强制模式增加日志
+                    if force:
+                        logger.info(f"NewsPush: No new items found for {sub.name} (Last: {last_time})")
                     continue
                     
                 logger.info(f"NewsPush: Found {len(fetched_items)} new items from {sub.name}")
                 
-                # Update last_publish_time immediately for safety (At-least-once)
-                # Or wait? User requested safety. 
-                # Let's update it AFTER processing current batch logic, but since we iterate items...
-                # To be safe, we update `last_publish_time` to the max time of fetched items 
-                # AFTER we successfully decide to process them.
-                
-                latest_item_time = max([x['date_published'] for x in fetched_items])
-                naive_latest = latest_item_time.astimezone(timezone.utc).replace(tzinfo=None)
-                await self._update_sub_last_publish(sub.id, naive_latest)
-
                 # C. Process Items
-                # 随机取 1 条避免刷屏 (Per Feed Limit)
+                # 随机取 1 条避免刷屏
                 target_item = random.choice(fetched_items)
                 
                 # D. Global Filter (Step 1)
                 should_pass = await self._filter_news_global(target_item)
                 if not should_pass:
                     logger.info(f"NewsPush: '{target_item['title']}' filtered out by Global Filter.")
+                    # 如果被过滤，我们依然更新时间戳，否则会卡在这里不断尝试该条
+                    latest_item_time = max([x['date_published'] for x in fetched_items])
+                    naive_latest = latest_item_time.astimezone(timezone.utc).replace(tzinfo=None)
+                    await self._update_sub_last_publish(sub.id, naive_latest)
                     continue
                     
                 # E. Dispatch to Linked Chats
@@ -89,6 +85,7 @@ class NewsPushService:
                     logger.info(f"NewsPush: No linked chats for {sub.name}.")
                     continue
                 
+                sent_any = False
                 for chat_id in linked_chat_ids:
                     # F. Chat Idle Check
                     if not force and not await self._is_chat_idle(chat_id):
@@ -100,10 +97,17 @@ class NewsPushService:
                     if speech:
                         logger.info(f"NewsPush: Decided to share to {chat_id}")
                         await self._act_send(chat_id, speech, context)
+                        sent_any = True
+
+                # H. Update Marker
+                # 只有在成功生成或强制模式下推演过后，才更新该订阅源的时间戳
+                if sent_any or force:
+                    latest_item_time = max([x['date_published'] for x in fetched_items])
+                    naive_latest = latest_item_time.astimezone(timezone.utc).replace(tzinfo=None)
+                    await self._update_sub_last_publish(sub.id, naive_latest)
 
             except Exception as e:
-                logger.error(f"NewsPush Error processing sub {sub.name}: {e}")
-                # Update Status (Error)
+                logger.error(f"NewsPush Error processing sub {sub.name}: {e}", exc_info=True)
                 await self._update_sub_status(sub.id, "error", error=str(e))
 
     async def _update_sub_status(self, sub_id: int, status: str, error: str = None):
@@ -145,18 +149,15 @@ class NewsPushService:
         """添加订阅源，并可选绑定到一个群组"""
         async for session in get_db_session():
             try:
-                # Check existing
                 existing = await session.execute(select(NewsSubscription).where(NewsSubscription.route == route))
                 sub = existing.scalar_one_or_none()
                 
                 if not sub:
                     sub = NewsSubscription(route=route, name=name)
                     session.add(sub)
-                    await session.flush() # get ID
+                    await session.flush()
                 
-                # Bind chat if requested
                 if bind_chat_id:
-                    # Check if binding exists
                     stmt_bind = select(ChatSubscription).where(
                         ChatSubscription.chat_id == bind_chat_id,
                         ChatSubscription.subscription_id == sub.id
@@ -173,12 +174,10 @@ class NewsPushService:
                 return False
 
     async def remove_subscription(self, sub_id: int) -> bool:
-        """删除订阅源 (级联删除关联?)"""
+        """删除订阅源"""
         from sqlalchemy import delete
         async for session in get_db_session():
-            # Delete bindings first
             await session.execute(delete(ChatSubscription).where(ChatSubscription.subscription_id == sub_id))
-            # Delete sub
             await session.execute(delete(NewsSubscription).where(NewsSubscription.id == sub_id))
             await session.commit()
             return True
@@ -189,19 +188,12 @@ class NewsPushService:
             result = await session.execute(select(NewsSubscription))
             return result.scalars().all()
 
-    # --- Refactored Components ---
-
     async def _filter_news_global(self, item: dict) -> bool:
-        """
-        Step 1: 全局价值过滤 (Is this trash?)
-        """
+        """全局价值过滤"""
         from utils.prompts import prompt_builder
         from core.config_service import config_service
-        
-        # 使用廉价模型
         settings_map = await config_service.get_all_settings()
         summary_model = settings_map.get("summary_model_name") or settings.SUMMARY_MODEL
-        
         msgs = prompt_builder.build_agentic_filter_messages(item['title'], item['content'][:500])
         try:
             resp = await simple_chat(summary_model, msgs, temperature=0.1)
@@ -211,22 +203,17 @@ class NewsPushService:
             return False
 
     async def _generate_speech(self, source_name: str, item: dict, chat_id: int) -> str:
-        """
-        Step 2: 个性化生成 (Speaker)
-        """
+        """个性的生成"""
         from utils.prompts import prompt_builder
         from core.config_service import config_service
         from core.summary_service import summary_service
-
         settings_map = await config_service.get_all_settings()
         main_model = settings_map.get("model_name") or settings.OPENAI_MODEL_NAME
-        
         group_memory = await summary_service.get_summary(chat_id)
         memory_context = f"\n[群组长期记忆/上下文]:\n{group_memory}" if group_memory else "\n[群组长期记忆]: 无相关历史."
-        
         sys_prompt_custom = settings_map.get("system_prompt", "")
+        # 注意：此处 build_system_prompt 的参数需要确保正确
         full_sys_prompt = prompt_builder.build_system_prompt(soul_prompt=sys_prompt_custom, dynamic_summary="") 
-
         msgs = prompt_builder.build_agentic_speaker_messages(
             system_prompt=full_sys_prompt,
             source_name=source_name,
@@ -234,15 +221,12 @@ class NewsPushService:
             content=item['content'][:500],
             memory_context=memory_context
         )
-
         try:
             resp = await simple_chat(main_model, msgs, temperature=0.8)
             return resp.strip() if resp else ""
         except Exception as e:
             logger.error(f"Speaker Error: {e}")
             return ""
-
-    # --- Helpers ---
 
     async def _is_active_hours(self) -> bool:
         from core.config_service import config_service
@@ -261,24 +245,20 @@ class NewsPushService:
         threshold_str = await config_service.get_value("agentic_idle_threshold", "30")
         try: threshold_seconds = int(threshold_str) * 60
         except: threshold_seconds = 1800
-        
         last_time = await history_service.get_last_message_time(chat_id)
         if not last_time: return True 
         if last_time.tzinfo is None: last_time = last_time.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
         return (now - last_time).total_seconds() > threshold_seconds
 
-    from core.sender_service import sender_service
-
     async def _act_send(self, chat_id: int, content: str, context: ContextTypes.DEFAULT_TYPE):
         try:
-            # 使用统一的 SenderService 发送，支持标签解析、拟人化延迟和历史持久化
             await sender_service.send_llm_reply(
                 chat_id=chat_id,
                 reply_content=content,
                 context=context
             )
         except Exception as e:
-            logger.error(f"NewsPush: Failed to send to {chat_id}: {e}")
+            logger.error(f"NewsPush: Failed to send to {chat_id}: {e}", exc_info=True)
 
 news_push_service = NewsPushService()
