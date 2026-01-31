@@ -29,6 +29,7 @@ class NewsService:
                 data = response.json()
                 
             items = data.get("items", [])
+            logger.info(f"NewsService: Fetched {len(items)} items from RSSHub (Route: {route})")
             new_items = []
             
             # 确保 last_time 有时区信息以便比较 (假设为 UTC)
@@ -42,11 +43,9 @@ class NewsService:
                     continue
                 
                 try:
-                    # 尝试解析 ISO 格式时间
-                    # Python 3.11+ fromisoformat 处理能力增强，主要兼容 RSSHub 的标准输出
                     pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
                 except ValueError:
-                    logger.warning(f"Failed to parse date: {pub_date_str}")
+                    logger.warning(f"NewsService: Failed to parse date: {pub_date_str}")
                     continue
 
                 if pub_date <= last_time:

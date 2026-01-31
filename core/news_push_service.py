@@ -53,6 +53,7 @@ class NewsPushService:
                     last_time = last_time.replace(tzinfo=timezone.utc)
 
                 fetched_items = await NewsService.fetch_new_items(sub.route, last_time)
+                logger.info(f"NewsPush: Fetched {len(fetched_items)} candidate items for {sub.name} (DB Last: {last_time})")
                 
                 # B. Update Status
                 await self._update_sub_status(sub.id, "normal", error=None)
@@ -70,14 +71,17 @@ class NewsPushService:
                 target_item = random.choice(fetched_items)
                 
                 # D. Global Filter (Step 1)
-                should_pass = await self._filter_news_global(target_item)
-                if not should_pass:
-                    logger.info(f"NewsPush: '{target_item['title']}' filtered out by Global Filter.")
-                    # 如果被过滤，我们依然更新时间戳，否则会卡在这里不断尝试该条
-                    latest_item_time = max([x['date_published'] for x in fetched_items])
-                    naive_latest = latest_item_time.astimezone(timezone.utc).replace(tzinfo=None)
-                    await self._update_sub_last_publish(sub.id, naive_latest)
-                    continue
+                if not force:
+                    should_pass = await self._filter_news_global(target_item)
+                    if not should_pass:
+                        logger.info(f"NewsPush: '{target_item['title']}' filtered out by Global Filter.")
+                        # 如果被过滤，我们依然更新时间戳，否则会卡在这里不断尝试该条
+                        latest_item_time = max([x['date_published'] for x in fetched_items])
+                        naive_latest = latest_item_time.astimezone(timezone.utc).replace(tzinfo=None)
+                        await self._update_sub_last_publish(sub.id, naive_latest)
+                        continue
+                else:
+                    logger.info(f"NewsPush: Skipping Global Filter because Force=True")
                     
                 # E. Dispatch to Linked Chats
                 linked_chat_ids = await self._get_linked_chats(sub.id)
@@ -197,6 +201,7 @@ class NewsPushService:
         msgs = prompt_builder.build_agentic_filter_messages(item['title'], item['content'][:500])
         try:
             resp = await simple_chat(summary_model, msgs, temperature=0.1)
+            logger.info(f"Global Filter Result for '{item['title']}': {resp}")
             return "YES" in resp
         except Exception as e:
             logger.error(f"Global Filter Error: {e}")
@@ -223,6 +228,7 @@ class NewsPushService:
         )
         try:
             resp = await simple_chat(main_model, msgs, temperature=0.8)
+            logger.info(f"Speaker Output for '{item['title']}': {resp!r}")
             return resp.strip() if resp else ""
         except Exception as e:
             logger.error(f"Speaker Error: {e}")
