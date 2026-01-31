@@ -1,0 +1,161 @@
+import asyncio
+import re
+from telegram import Update, constants, ReactionTypeEmoji
+from telegram.ext import ContextTypes
+from core.history_service import history_service
+from utils.logger import logger
+
+class SenderService:
+    """
+    统一消息发送服务
+    负责解析 <chat> 标签、拟人化延迟、表情回应和历史记录持久化
+    """
+    
+    # 表情白名单
+    TG_FREE_REACTIONS = {
+        "👍", "👎", "❤️", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", 
+        "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊️", "🤡", 
+        "🥱", "🥴", "😍", "🐳", "❤️‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", 
+        "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", 
+        "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", 
+        "🤝", "✍️", "🤗", "🫡", "🎅", "🎄", "☃️", "💅", "🤪", "🗿", 
+        "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂️", 
+        "🤷", "🤷‍♀️", "😡"
+    }
+
+    async def send_llm_reply(self, chat_id: int, reply_content: str, context: ContextTypes.DEFAULT_TYPE, history_msgs: list = None):
+        """
+        解析 LLM 输出并发送消息
+        :param chat_id: 目标会话 ID
+        :param reply_content: LLM 生成的原始内容 (带标签)
+        :param context: Telegram Context
+        :param history_msgs: 历史消息列表 (用于兜底表情回应目标)
+        """
+        # 1. 解析标签
+        tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
+        matches = list(re.finditer(tag_pattern, reply_content, flags=re.DOTALL))
+        
+        reply_blocks = []
+        cleaned_history_parts = []
+
+        if not matches:
+            # 兜底处理无标签情况
+            reply_blocks.append({"content": reply_content.strip(), "reply": None, "react": None})
+            cleaned_history_parts.append(f"<chat>{reply_content.strip()}</chat>")
+        else:
+            for m in matches:
+                attrs_raw = m.group("attrs")
+                content = m.group("content").strip()
+                
+                reply_id = None
+                react_emoji = None
+                
+                # 解析属性
+                reply_match = re.search(r'reply=["\'](\d+)["\']', attrs_raw)
+                if reply_match:
+                    reply_id = int(reply_match.group(1))
+                    
+                react_match = re.search(r'react=["\']([^"\']+)["\']', attrs_raw)
+                if react_match:
+                    react_emoji = react_match.group(1).strip()
+                
+                # 清洗表情（仅用于历史记录）
+                valid_react_for_history = None
+                if react_emoji:
+                    emoji_to_check = react_emoji.split(":")[0].strip() if ":" in react_emoji else react_emoji
+                    if emoji_to_check in self.TG_FREE_REACTIONS:
+                        valid_react_for_history = react_emoji
+                
+                # 构建清洗后的标签用于保存
+                attr_str = ""
+                if reply_id: attr_str += f' reply="{reply_id}"'
+                if valid_react_for_history: attr_str += f' react="{valid_react_for_history}"'
+                cleaned_history_parts.append(f"<chat{attr_str}>{content}</chat>")
+
+                if content or react_emoji:
+                    reply_blocks.append({
+                        "content": content if content else "...",
+                        "reply": reply_id,
+                        "react": react_emoji
+                    })
+
+        cleaned_reply_content = "\n".join(cleaned_history_parts)
+
+        # 2. 依次发送块
+        for i, block in enumerate(reply_blocks):
+            content = block["content"]
+            target_reply_id = block["reply"]
+            target_react_emoji = block["react"]
+
+            # 处理表情回应
+            if target_react_emoji:
+                await self._handle_reaction(chat_id, target_react_emoji, target_reply_id, history_msgs, context)
+
+            # 处理消息发送
+            if not content or content == "...":
+                continue
+
+            # 拟人化延迟
+            if i > 0:
+                await asyncio.sleep(1.0)
+            
+            typing_duration = min(len(content) * 0.15, 3.0)
+            await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+            await asyncio.sleep(typing_duration)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id, 
+                    text=content, 
+                    reply_to_message_id=target_reply_id
+                )
+            except Exception as e:
+                logger.warning(f"SenderService: Failed to send part {i} to {chat_id}: {e}")
+                if target_reply_id: # 降级不带引用重试
+                    try:
+                        await context.bot.send_message(chat_id=chat_id, text=content)
+                    except: pass
+        
+        # 3. 记录历史
+        await history_service.add_message(chat_id, "assistant", cleaned_reply_content)
+        
+        # 4. 触发总结检查
+        try:
+            from core.summary_service import summary_service
+            asyncio.create_task(summary_service.check_and_summarize(chat_id))
+        except Exception as e:
+            logger.error(f"SenderService: Failed to trigger summary for {chat_id}: {e}")
+
+    async def _handle_reaction(self, chat_id: int, react_emoji: str, target_reply_id: int, history_msgs: list, context: ContextTypes.DEFAULT_TYPE):
+        """处理表情回应逻辑"""
+        react_id = None
+        react_emoji_part = react_emoji
+        if ":" in react_emoji:
+            parts = react_emoji.split(":", 1)
+            react_emoji_part = parts[0].strip()
+            try:
+                react_id = int(parts[1].strip())
+            except: pass
+
+        if react_emoji_part not in self.TG_FREE_REACTIONS:
+            logger.warning(f"SenderService: Reaction '{react_emoji_part}' not in whitelist.")
+            return
+
+        try:
+            # 确定目标 ID
+            react_target_id = react_id or target_reply_id
+            if not react_target_id and history_msgs:
+                last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
+                if last_user_msg:
+                    react_target_id = last_user_msg.message_id
+            
+            if react_target_id:
+                await context.bot.set_message_reaction(
+                    chat_id=chat_id,
+                    message_id=react_target_id,
+                    reaction=[ReactionTypeEmoji(react_emoji_part)]
+                )
+        except Exception as e:
+            logger.warning(f"SenderService: Failed to set reaction on MSG {react_target_id}: {e}")
+
+sender_service = SenderService()

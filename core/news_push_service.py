@@ -268,19 +268,16 @@ class NewsPushService:
         now = datetime.now(timezone.utc)
         return (now - last_time).total_seconds() > threshold_seconds
 
+    from core.sender_service import sender_service
+
     async def _act_send(self, chat_id: int, content: str, context: ContextTypes.DEFAULT_TYPE):
         try:
-            typing_seconds = min(len(content) * 0.1, 10.0)
-            if typing_seconds < 2: typing_seconds = 2.0
-            await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-            await asyncio.sleep(typing_seconds)
-            await context.bot.send_message(chat_id=chat_id, text=content)
-            await history_service.add_message(chat_id, "assistant", content)
-            
-            # Auto-Archive: Prevent memory pollution
-            from core.summary_service import summary_service
-            await summary_service.check_and_summarize(chat_id)
-            
+            # 使用统一的 SenderService 发送，支持标签解析、拟人化延迟和历史持久化
+            await sender_service.send_llm_reply(
+                chat_id=chat_id,
+                reply_content=content,
+                context=context
+            )
         except Exception as e:
             logger.error(f"NewsPush: Failed to send to {chat_id}: {e}")
 
