@@ -1,3 +1,5 @@
+"""Telegram 频道消息提取器"""
+
 import httpx
 import re
 import html
@@ -8,22 +10,19 @@ from utils.logger import logger
 
 
 class TelegramChannelScraper:
-    """
-    Telegram Channel Web 解析器
-    直接解析公开频道页面，无需 RSSHub
-    """
+    """Telegram 频道网页解析器 - 直接抓取公开频道，无需 RSSHub"""
 
     @staticmethod
     async def scrape_channel(channel_username: str, last_time: datetime) -> List[Dict]:
         """
-        抓取 Telegram Channel 公开页面的新消息
-        :param channel_username: Channel 用户名 (如 tginfo)
-        :param last_time: 上次读取的时间 (Naive UTC)
+        抓取 Telegram 公开频道的新消息
+        :param channel_username: 频道用户名 (如 tginfo)
+        :param last_time: 上次读取时间 (Naive UTC)
         :return: 新消息列表
         """
         url = f"https://t.me/s/{channel_username}"
         
-        # 确保 last_time 有时区信息
+        # 确保时区信息
         if last_time.tzinfo is None:
             last_time = last_time.replace(tzinfo=timezone.utc)
         
@@ -104,9 +103,7 @@ class TelegramChannelScraper:
     
     @staticmethod
     def _extract_text(element) -> str:
-        """
-        从 HTML 元素提取纯文本，保留基本格式
-        """
+        """从 HTML 元素提取纯文本，保留基本格式"""
         # 获取所有文本，保留换行
         text = element.get_text(separator='\n', strip=False)
         

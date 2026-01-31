@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from config.settings import settings
 from utils.logger import logger
-from core.telegram_channel_scraper import TelegramChannelScraper
+from extractors.telegram_channel import TelegramChannelScraper
 
 class NewsService:
     """

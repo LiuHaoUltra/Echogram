@@ -1,15 +1,17 @@
+"""数据库异步引擎与会话管理"""
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from config.settings import settings
 from models.base import Base
 
-# 异步引擎
+# 创建异步引擎
 engine = create_async_engine(
     settings.DB_URL,
-    echo=False, # True 查看 SQL
+    echo=False,  # 设为 True 可查看 SQL 日志
     future=True
 )
 
-# 异步会话工厂
+# 创建异步会话工厂
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -20,10 +22,9 @@ AsyncSessionLocal = async_sessionmaker(
 async def init_db():
     """初始化数据库：创建所有表"""
     async with engine.begin() as conn:
-        # Dev: create_all
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db_session():
-    """获取数据库会话生成器 (Dependency)"""
+    """数据库会话生成器"""
     async with AsyncSessionLocal() as session:
         yield session

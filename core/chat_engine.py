@@ -14,6 +14,7 @@ from core.secure import is_admin
 from core.lazy_sender import lazy_sender
 from utils.logger import logger
 from utils.prompts import prompt_builder
+from utils.config_validator import safe_int_config, safe_float_config
 from core.sender_service import sender_service
 
 async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -27,7 +28,8 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     chat = update.effective_chat
     message = update.message
     
-    if not message or not message.text:
+    # 空值检查：user、chat、message 必须存在
+    if not user or not chat or not message or not message.text:
         return
         
     # 指令交由 CommandHandler 处理
@@ -103,19 +105,23 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         dynamic_summary=dynamic_summary
     )
     
-    token_limit_str = configs.get("history_tokens")
-    if token_limit_str and token_limit_str.isdigit():
-        target_tokens = int(token_limit_str)
-    else:
-        target_tokens = settings.HISTORY_WINDOW_TOKENS
+    # 安全转换配置值，范围 100-50000
+    target_tokens = safe_int_config(
+        configs.get("history_tokens"),
+        settings.HISTORY_WINDOW_TOKENS,
+        min_val=100,
+        max_val=50000
+    )
         
     history_msgs = await history_service.get_token_controlled_context(chat_id, target_tokens=target_tokens)
     
     messages = [{"role": "system", "content": system_content}]
     
+    # 安全的时区处理
     try:
         tz = pytz.timezone(timezone)
-    except:
+    except pytz.UnknownTimeZoneError:
+        logger.warning(f"Unknown timezone '{timezone}', fallback to UTC")
         tz = pytz.UTC
         
     for h in history_msgs:
@@ -142,11 +148,13 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         else:
             messages.append({"role": "assistant", "content": h.content})
         
-    temp_str = configs.get("temperature", "0.7")
-    try:
-        current_temp = float(temp_str)
-    except:
-        current_temp = 0.7
+    # 安全转换 temperature，范围 0.0-2.0
+    current_temp = safe_float_config(
+        configs.get("temperature", "0.7"),
+        default=0.7,
+        min_val=0.0,
+        max_val=2.0
+    )
 
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
@@ -158,12 +166,16 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             max_tokens=4000
         )
         
+        # 检查 LLM 响应有效性
         if not response.choices or not response.choices[0].message.content:
-             reply_content = "" 
-             logger.warning(f"LLM ({model}) returned EMPTY content.")
-        else:
-             reply_content = response.choices[0].message.content.strip()
-             
+            logger.warning(f"LLM ({model}) returned EMPTY content.")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ AI 未返回有效回复，请稍后重试或检查配置"
+            )
+            return
+        
+        reply_content = response.choices[0].message.content.strip()
         logger.info(f"RAW LLM OUTPUT: {reply_content!r}")
 
         await sender_service.send_llm_reply(

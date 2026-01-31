@@ -1,29 +1,28 @@
+"""消息智能分割：保护代码块完整性"""
+
 import re
 
 def split_message(text: str) -> list[str]:
     """
-    智能拆分消息 (保护代码块)
+    智能拆分长消息，保护代码块不被破坏
+    :param text: 原始消息
+    :return: 拆分后的消息列表
     """
     if not text:
         return []
 
-    # 1. 提取代码块
-    # 正则提取代码块
-    # 替换为占位符
-    
+    # 1. 提取并保护代码块
     code_blocks = []
     
     def replacer(match):
         code_blocks.append(match.group(0))
         return f"__CODE_BLOCK_{len(code_blocks)-1}__"
 
-    # 正则：匹配 ```code``` 块
+    # 匹配 ```code``` 格式
     pattern = re.compile(r"```.*?```", re.DOTALL)
-    
-    # 替换代码块为占位符
     text_safe = pattern.sub(replacer, text)
     
-    # 2. 按换行拆分
+    # 2. 按行拆分
     lines = text_safe.split('\n')
     
     results = []
@@ -34,9 +33,7 @@ def split_message(text: str) -> list[str]:
             continue
             
         # 3. 还原代码块
-        # 循环替换以防万一
         if "__CODE_BLOCK_" in line:
-            # 找到所有占位符
             placeholders = re.findall(r"__CODE_BLOCK_(\d+)__", line)
             for idx_str in placeholders:
                 idx = int(idx_str)

@@ -25,12 +25,12 @@ class LazySender:
         """
         current_time = time.time()
         
-        # 读取防抖配置
+        # 读取防抖配置，范围 0.5-300 秒
         idle_wait_str = await config_service.get_value("aggregation_latency", "10")
         try:
             idle_wait = float(idle_wait_str)
-            if idle_wait < 0: idle_wait = 0.5
-        except:
+            idle_wait = max(0.5, min(idle_wait, 300.0))  # 限制范围
+        except (ValueError, TypeError):
             idle_wait = 10.0
             
         # 初始化 Buffer
