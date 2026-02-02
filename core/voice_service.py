@@ -109,10 +109,6 @@ class VoiceService:
             "role": "user",
             "content": [
                 {
-                    "type": "text",
-                    "text": "请转录这段语音，仅返回转录文字，不要添加任何额外内容"
-                },
-                {
                     "type": "input_audio",
                     "input_audio": {
                         "data": base64_audio,

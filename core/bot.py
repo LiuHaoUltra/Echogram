@@ -16,6 +16,28 @@ async def post_init(application: Application):
     await init_db()
     logger.info("Database initialized successfully.")
     
+    # --- Schema Patch (Fix for message_type missing) ---
+    try:
+        from config.database import get_db_session
+        from sqlalchemy import text
+        async for session in get_db_session():
+            try:
+                # 检查列是否存在 (SQLite)
+                await session.execute(text("SELECT message_type FROM history LIMIT 1"))
+            except Exception:
+                logger.warning("Column 'message_type' missing in 'history'. Applying patch...")
+                # SQLite 不支持 IF NOT EXISTS COLUMN，捕获异常即代表需要添加
+                try:
+                    await session.execute(text("ALTER TABLE history ADD COLUMN message_type VARCHAR(10) DEFAULT 'text'"))
+                    await session.commit()
+                    logger.info("Schema patch applied: 'message_type' column added.")
+                except Exception as e:
+                    logger.error(f"Failed to apply schema patch: {e}")
+            break # 用完即弃
+    except Exception as e:
+        logger.error(f"Schema check failed: {e}")
+    # ---------------------------------------------------
+    
     # 确认连接
     bot_info = await application.bot.get_me()
     logger.info(f"Bot connected: @{bot_info.username} (ID: {bot_info.id})")
