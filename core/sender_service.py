@@ -178,9 +178,16 @@ class SenderService:
             # 确定目标 ID
             react_target_id = react_id or target_reply_id
             if not react_target_id and history_msgs:
-                last_user_msg = next((m for m in reversed(history_msgs) if m.get('role') == 'user'), None)
+                # 兼容字典和模型对象
+                last_user_msg = None
+                for m in reversed(history_msgs):
+                    role = m.get('role') if isinstance(m, dict) else getattr(m, 'role', None)
+                    if role == 'user':
+                        last_user_msg = m
+                        break
+                
                 if last_user_msg:
-                    react_target_id = last_user_msg.get('message_id')
+                    react_target_id = last_user_msg.get('message_id') if isinstance(last_user_msg, dict) else getattr(last_user_msg, 'message_id', None)
             
             if react_target_id:
                 await context.bot.set_message_reaction(

@@ -125,8 +125,13 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
         history_objs = await history_service.get_recent_messages(chat.id, limit=20)
         history_context = []
         for h in history_objs:
-            role = h.role
-            history_context.append({"role": role, "content": h.content})
+            # 必须包含 message_id，否则 SenderService 无法进行表情回应
+            history_context.append({
+                "role": h.role, 
+                "content": h.content, 
+                "message_id": h.message_id,
+                "chat_id": h.chat_id
+            })
             
         # 调用 Voice Service (多模态对话)
         # 返回: <transcript>...</transcript><chat>...</chat>
@@ -181,6 +186,13 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
             reply_to_content=reply_to_content,
             message_type="voice"
         )
+        # 将当前消息也加入上下文，方便 sender_service 将表情点在当前语音上
+        history_context.append({
+            "role": "user",
+            "content": transcript,
+            "message_id": message.message_id,
+            "chat_id": chat.id
+        })
         
         # 4.2 助手回复
         # 注意: 这里我们跳过了 LazySender 的队列，因为语音回复是即时的且已经生成好了
