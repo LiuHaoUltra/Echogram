@@ -214,7 +214,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "set_tts_url":
         current_val = await config_service.get_value("tts_api_url", "未配置")
         await query.edit_message_text(
-            text=f"🔊 <b>设置 TTS API URL</b>\n\n当前: <code>{current_val}</code>\n\n请输入 GPT-SoVITS API 地址\n示例: <code>https://tts.celia.sh</code>",
+            text=f"🔊 <b>设置 TTS API URL</b>\n\n当前: <code>{current_val}</code>\n\n请输入 GPT-SoVITS API 地址\n示例: <code>https://tts.example.com</code>",
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )

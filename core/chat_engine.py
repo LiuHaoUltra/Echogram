@@ -285,22 +285,91 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 if await voice_service.is_tts_configured():
                     logger.info(f"TTS Mode: Generating voice reply...")
                     
-                    # 先存储文字回复到数据库
+                    # --- 1. 解析 LLM 输出 (提取文字 & 表情) ---
+                    # 参考 SenderService 的解析逻辑
+                    # 匹配标签: <chat attr="...">content</chat>
+                    tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
+                    match = re.search(tag_pattern, reply_content, flags=re.DOTALL)
+                    
+                    clean_text = reply_content
+                    react_emoji = None
+                    reply_to_msg_id = None
+                    
+                    if match:
+                        attrs_raw = match.group("attrs")
+                        clean_text = match.group("content").strip()
+                        
+                        # 提取 react 属性
+                        react_match = re.search(r'react=["\']([^"\']+)["\']', attrs_raw)
+                        if react_match:
+                            react_emoji = react_match.group(1).strip()
+                            # 简单清洗表情 (移除 ID 后缀)
+                            if ":" in react_emoji:
+                                react_emoji = react_emoji.split(":")[0].strip()
+                                
+                        # 提取 reply 属性
+                        reply_match = re.search(r'reply=["\'](\d+)["\']', attrs_raw)
+                        if reply_match:
+                             try:
+                                 reply_to_msg_id = int(reply_match.group(1))
+                             except: pass
+
+                    # 兜底：如果解析后为空，回退到原始文本 (防止空语音)
+                    target_text_for_tts = clean_text if clean_text else reply_content
+                    
+                    # --- 2. 处理表情回应 ---
+                    if react_emoji and react_emoji in sender_service.TG_FREE_REACTIONS:
+                        try:
+                            # 查找目标消息 ID (优先使用 XML 指定的回复 ID，否则找最后一条 user 消息)
+                            target_react_id = reply_to_msg_id
+                            
+                            if not target_react_id and history_msgs:
+                                last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
+                                if last_user_msg:
+                                    target_react_id = last_user_msg.message_id
+                            
+                            if target_react_id:
+                                from telegram import ReactionTypeEmoji
+                                await context.bot.set_message_reaction(
+                                    chat_id=chat_id,
+                                    message_id=target_react_id,
+                                    reaction=[ReactionTypeEmoji(react_emoji)]
+                                )
+                                logger.info(f"Voice Mode: Reacted {react_emoji} to MSG {target_react_id}")
+                        except Exception as e:
+                            logger.warning(f"Voice Mode: Failed to set reaction: {e}")
+
+                    # --- 3. 模拟录制时长 ---
+                    # 拟人化时长：每字符 0.15s，上限 5s
+                    duration = min(len(target_text_for_tts) * 0.15, 5.0)
+                    
+                    # 发送 "正在录音..." 状态
+                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
+                    await asyncio.sleep(duration)
+
+                    # --- 4. 生成 & 发送语音 ---
+                    # 先存储助手回复 (存原始带标签文本，保持上下文一致性)
                     await history_service.add_message(
                         chat_id=chat_id,
                         role="assistant",
                         content=reply_content,
-                        message_type="text"  # 助手回复仍以文字形式存储
+                        message_type="text"
                     )
                     
-                    # 生成语音
-                    voice_bytes = await voice_service.text_to_speech(reply_content)
+                    # 生成语音 (使用清洗后的纯文本)
+                    voice_bytes = await voice_service.text_to_speech(target_text_for_tts)
                     
+                    # 发送 "正在上传..." 状态
+                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
+                    # 稍微模拟上传耗时
+                    await asyncio.sleep(0.5)
+
                     # 发送语音消息
                     from io import BytesIO
                     await context.bot.send_voice(
                         chat_id=chat_id,
-                        voice=BytesIO(voice_bytes)
+                        voice=BytesIO(voice_bytes),
+                        reply_to_message_id=reply_to_msg_id
                     )
                     
                     logger.info(f"Voice reply sent successfully")
