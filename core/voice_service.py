@@ -108,8 +108,9 @@ class VoiceService:
             "<transcript>...Transcribe the user's speech verbatim here...</transcript>\n"
             "<chat>...Your natural, conversational reply here (following all Soul/Protocol rules)...</chat>\n\n"
             "Example:\n"
-            "<transcript>Hello, what time is it?</transcript>\n"
-            "<chat>It's 10 PM. <chat react=\"😴\">Time for bed?</chat></chat>"
+            "<transcript>你好，现在几点了？</transcript>\n"
+            "<chat>已经是晚上十点了。</chat>\n"
+            "<chat react=\"😴\">该睡觉啦！</chat>"
         )
         
         final_system_prompt = system_prompt + voice_protocol

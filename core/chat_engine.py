@@ -446,6 +446,9 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     logger.warning(f"Voice Mode: Failed to process reaction {react_emoji}: {e}")
 
             # --- 发送 Voice Bubble ---
+            # 清洗文本 (移除所有 XML 标签，防止 TTS 读出标签)
+            text_part = re.sub(r'<[^>]+>', '', text_part).strip()
+
             if text_part:
                 # 拟人化时长
                 duration = min(len(text_part) * 0.2, 5.0)
