@@ -3,6 +3,7 @@ import re
 from telegram import Update, constants, ReactionTypeEmoji
 from telegram.ext import ContextTypes
 from core.history_service import history_service
+from core.voice_service import voice_service
 from utils.logger import logger
 
 class SenderService:
@@ -23,13 +24,14 @@ class SenderService:
         "🤷", "🤷‍♀️", "😡"
     }
 
-    async def send_llm_reply(self, chat_id: int, reply_content: str, context: ContextTypes.DEFAULT_TYPE, history_msgs: list = None):
+    async def send_llm_reply(self, chat_id: int, reply_content: str, context: ContextTypes.DEFAULT_TYPE, history_msgs: list = None, message_type: str = 'text'):
         """
         解析 LLM 输出并发送消息
         :param chat_id: 目标会话 ID
         :param reply_content: LLM 生成的原始内容 (带标签)
         :param context: Telegram Context
         :param history_msgs: 历史消息列表 (用于兜底表情回应目标)
+        :param message_type: 'text' 或 'voice'。若为 'voice' 且 ASR/TTS 已配置，则发送语音。
         """
         # 1. 解析标签
         tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
@@ -95,26 +97,53 @@ class SenderService:
             if not content or content == "...":
                 continue
 
-            # 拟人化延迟
+            # 拟人化延迟 (文字模式显示 Typing，语音模式显示 Record Voice)
             if i > 0:
                 await asyncio.sleep(1.0)
             
-            typing_duration = min(len(content) * 0.15, 3.0)
-            await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
-            await asyncio.sleep(typing_duration)
+            if message_type == 'voice' and await voice_service.is_tts_configured():
+                # --- 语音模式发送 ---
+                # 清洗文本 (移除所有 XML 标签，防止 TTS 读出标签)
+                clean_text = re.sub(r'<[^>]+>', '', content).strip()
+                if not clean_text: continue
 
-            try:
-                await context.bot.send_message(
-                    chat_id=chat_id, 
-                    text=content, 
-                    reply_to_message_id=target_reply_id
-                )
-            except Exception as e:
-                logger.warning(f"SenderService: Failed to send part {i} to {chat_id}: {e}")
-                if target_reply_id: # 降级不带引用重试
-                    try:
-                        await context.bot.send_message(chat_id=chat_id, text=content)
-                    except: pass
+                # 拟人化时长 (根据文字长度模拟录音时间)
+                rec_duration = min(len(clean_text) * 0.2, 5.0)
+                await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
+                await asyncio.sleep(rec_duration)
+
+                try:
+                    voice_bytes = await voice_service.text_to_speech(clean_text)
+                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
+                    
+                    import time
+                    await context.bot.send_voice(
+                        chat_id=chat_id,
+                        voice=voice_bytes,
+                        filename=f"voice_{int(time.time())}_{i}.ogg",
+                        reply_to_message_id=target_reply_id
+                    )
+                except Exception as e:
+                    logger.error(f"SenderService: TTS Failed, falling back to text: {e}")
+                    await context.bot.send_message(chat_id=chat_id, text=clean_text, reply_to_message_id=target_reply_id)
+            else:
+                # --- 文字模式发送 ---
+                typing_duration = min(len(content) * 0.15, 3.0)
+                await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+                await asyncio.sleep(typing_duration)
+
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat_id, 
+                        text=content, 
+                        reply_to_message_id=target_reply_id
+                    )
+                except Exception as e:
+                    logger.warning(f"SenderService: Failed to send part {i} to {chat_id}: {e}")
+                    if target_reply_id: # 降级不带引用重试
+                        try:
+                            await context.bot.send_message(chat_id=chat_id, text=content)
+                        except: pass
         
         # 3. 记录历史
         await history_service.add_message(chat_id, "assistant", cleaned_reply_content)
