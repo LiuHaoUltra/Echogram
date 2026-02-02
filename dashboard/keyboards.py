@@ -71,15 +71,24 @@ def get_memory_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_voice_keyboard() -> InlineKeyboardMarkup:
-    """语音配置菜单"""
+async def get_voice_keyboard() -> InlineKeyboardMarkup:
+    """语音配置菜单 (动态)"""
+    from core.config_service import config_service
+    
+    # 动态获取 TTS 状态
+    tts_enabled = await config_service.get_value("tts_enabled", "false")
+    is_enabled = str(tts_enabled).strip().lower() in ("true", "1", "yes")
+    
+    toggle_text = "✅ 禁用 TTS (Enabled)" if is_enabled else "❌ 启用 TTS (Disabled)"
+    toggle_data = "toggle_tts"
+    
     keyboard = [
         [InlineKeyboardButton("🎙️ 配置 ASR 模型", callback_data="set_asr_model")],
         [InlineKeyboardButton("🔊 配置 TTS (URL)", callback_data="set_tts_url")],
         [InlineKeyboardButton("🎵 配置参考音频", callback_data="set_tts_ref_audio")],
         [InlineKeyboardButton("🌐 设置 TTS 语言", callback_data="set_tts_lang")],
         [InlineKeyboardButton("⚡ 设置语速倍率", callback_data="set_tts_speed")],
-        [InlineKeyboardButton("✅ 启用/禁用 TTS", callback_data="toggle_tts")],
+        [InlineKeyboardButton(toggle_text, callback_data=toggle_data)],  # 动态文本
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)

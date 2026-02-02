@@ -74,29 +74,29 @@ class VoiceService:
         if not api_key:
             raise ASRNotConfiguredError("API Key 未配置")
         
-        # Base64 编码音频 (OGG -> FLAC 转换)
-        # OpenAI Chat API 不支持 OGG，需转换为 FLAC (更严格兼容)
+        # Base64 编码音频 (OGG -> WAV 转换)
+        # OpenAI Chat API 不支持 OGG，需转换为 WAV
         import uuid
         import os
         from pydub import AudioSegment
         import io
         
         temp_ogg_path = f"/tmp/{uuid.uuid4()}.ogg"
-        temp_flac_path = f"/tmp/{uuid.uuid4()}.flac"
+        temp_wav_path = f"/tmp/{uuid.uuid4()}.wav"
         
         try:
             # 1. 保存 OGG 到临时文件
             with open(temp_ogg_path, "wb") as f:
                 f.write(voice_file_bytes)
             
-            # 2. 转换为 FLAC
+            # 2. 转换为 WAV
             audio = AudioSegment.from_ogg(temp_ogg_path)
-            audio.export(temp_flac_path, format="flac")
+            audio.export(temp_wav_path, format="wav")
             
-            # 3. 读取 FLAC 并编码
-            with open(temp_flac_path, "rb") as f:
-                flac_bytes = f.read()
-                base64_audio = base64.b64encode(flac_bytes).decode('utf-8')
+            # 3. 读取 WAV 并编码
+            with open(temp_wav_path, "rb") as f:
+                wav_bytes = f.read()
+                base64_audio = base64.b64encode(wav_bytes).decode('utf-8')
                 
         except Exception as e:
             logger.error(f"音频格式转换失败: {e}")
@@ -105,10 +105,10 @@ class VoiceService:
             # 清理临时文件
             if os.path.exists(temp_ogg_path):
                 os.remove(temp_ogg_path)
-            if os.path.exists(temp_flac_path):
-                os.remove(temp_flac_path)
+            if os.path.exists(temp_wav_path):
+                os.remove(temp_wav_path)
         
-        # 构造多模态消息 (严格顺序: System -> User[Audio -> Text])
+        # 构造多模态消息 (Text 优先，参考 OpenRouter 示例)
         messages = [
             {
                 "role": "system",
@@ -118,15 +118,15 @@ class VoiceService:
                 "role": "user",
                 "content": [
                     {
+                        "type": "text",
+                        "text": "Transcribe the audio content verbatim."
+                    },
+                    {
                         "type": "input_audio",
                         "input_audio": {
                             "data": base64_audio,
-                            "format": "flac"
+                            "format": "wav"
                         }
-                    },
-                    {
-                        "type": "text",
-                        "text": "Transcribe."
                     }
                 ]
             }
