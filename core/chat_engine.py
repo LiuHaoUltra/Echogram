@@ -397,76 +397,92 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     
                     clean_text = reply_content
                     react_emoji = None
-                    reply_to_msg_id = None
-                    
-                    if match:
-                        attrs_raw = match.group("attrs")
-                        clean_text = match.group("content").strip()
-                        
-                        # 提取 react 属性
-                        react_match = re.search(r'react=["\']([^"\']+)["\']', attrs_raw)
-                        if react_match:
-                            react_emoji = react_match.group(1).strip()
-                            # 简单清洗表情 (移除 ID 后缀)
-                            if ":" in react_emoji:
-                                react_emoji = react_emoji.split(":")[0].strip()
-                                
-                        # 提取 reply 属性
-                        reply_match = re.search(r'reply=["\'](\d+)["\']', attrs_raw)
-                        if reply_match:
-                             try:
-                                 reply_to_msg_id = int(reply_match.group(1))
-                             except: pass
+        # --- 5. 处理回复 (Multi-Bubble) ---
+        # 提取所有 <chat> 标签 (Tag Block) 包括属性和内容
+        # 正则说明: 匹配 (<chat[^>]*>.*?</chat>)，提取完整块
+        chat_blocks = re.findall(r"(<chat[^>]*>.*?</chat>)", reply_content, flags=re.DOTALL)
+        
+        # 如果没匹配到，构造一个虚拟块
+        if not chat_blocks:
+            chat_blocks = [f"<chat>{reply_content.strip()}</chat>"]
 
-                    # 兜底：如果解析后为空，回退到原始文本 (防止空语音)
-                    target_text_for_tts = clean_text if clean_text else reply_content
-                    
-                    # --- 2. 处理表情回应 ---
-                    if react_emoji and react_emoji in sender_service.TG_FREE_REACTIONS:
-                        try:
-                            # 查找目标消息 ID (优先使用 XML 指定的回复 ID，否则找最后一条 user 消息)
-                            target_react_id = reply_to_msg_id
-                            
-                            if not target_react_id and history_msgs:
-                                last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
-                                if last_user_msg:
-                                    target_react_id = last_user_msg.message_id
-                            
-                            if target_react_id:
-                                from telegram import ReactionTypeEmoji
-                                await context.bot.set_message_reaction(
-                                    chat_id=chat_id,
-                                    message_id=target_react_id,
-                                    reaction=[ReactionTypeEmoji(react_emoji)]
-                                )
-                                logger.info(f"Voice Mode: Reacted {react_emoji} to MSG {target_react_id}")
-                        except Exception as e:
-                            logger.warning(f"Voice Mode: Failed to set reaction: {e}")
+        # 先存储助手历史 (One Entry, Full Context)
+        # 保持数据库整洁，存储完整的 XML 回复
+        await history_service.add_message(
+            chat_id=chat.id,
+            role="assistant",
+            content=reply_content,
+            message_type="text"
+        )
 
-                    # --- 3. 模拟录制时长 ---
-                    # 拟人化时长：每字符 0.15s，上限 5s
-                    duration = min(len(target_text_for_tts) * 0.15, 5.0)
-                    
-                    # 发送 "正在录音..." 状态
-                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
-                    await asyncio.sleep(duration)
+        # 逐个气泡处理
+        for index, block in enumerate(chat_blocks):
+            # 解析 Attributes
+            attrs_match = re.search(r"<chat([^>]*)>", block)
+            attrs_raw = attrs_match.group(1) if attrs_match else ""
+            
+            # 解析 Content
+            content_match = re.search(r">(.+?)</chat>", block, flags=re.DOTALL)
+            text_part = content_match.group(1).strip() if content_match else ""
+            
+            # 1. 提取 React
+            react_emoji = None
+            react_match = re.search(r'react=["\']([^"\']+)["\']', attrs_raw)
+            if react_match:
+                react_emoji = react_match.group(1).split(":")[0].strip()
+            
+            # 2. 提取 Reply ID
+            reply_to_target = None
+            reply_match = re.search(r'reply=["\'](\d+)["\']', attrs_raw)
+            if reply_match:
+                 try: 
+                     reply_to_target = int(reply_match.group(1)) 
+                 except: pass
 
-                    # --- 4. 生成 & 发送语音 ---
-                    # 先存储助手回复 (存原始带标签文本，保持上下文一致性)
-                    await history_service.add_message(
-                        chat_id=chat_id,
-                        role="assistant",
-                        content=reply_content,
-                        message_type="text"
+            # --- 发送 Reaction ---
+            if react_emoji and react_emoji in sender_service.TG_FREE_REACTIONS:
+                try:
+                    target_id = reply_to_target if reply_to_target else message.message_id
+                    from telegram import ReactionTypeEmoji
+                    await context.bot.set_message_reaction(
+                        chat_id=chat.id,
+                        message_id=target_id,
+                        reaction=[ReactionTypeEmoji(react_emoji)]
                     )
-                    
-                    # 生成语音 (使用清洗后的纯文本)
-                    voice_bytes = await voice_service.text_to_speech(target_text_for_tts)
-                    
-                    # 发送 "正在上传..." 状态
-                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
-                    # 稍微模拟上传耗时
-                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"Voice Mode: Failed to process reaction {react_emoji}: {e}")
+
+            # --- 发送 Voice Bubble ---
+            if text_part:
+                # 拟人化时长
+                duration = min(len(text_part) * 0.2, 5.0)
+                await context.bot.send_chat_action(chat_id=chat.id, action=constants.ChatAction.RECORD_VOICE)
+                await asyncio.sleep(duration)
+                
+                if await voice_service.is_tts_configured():
+                    try:
+                        voice_bytes = await voice_service.text_to_speech(text_part)
+                        
+                        await context.bot.send_chat_action(chat_id=chat.id, action=constants.ChatAction.UPLOAD_VOICE)
+                        
+                        # 显式指定 filename 解决 0:00 bug
+                        # 使用时间戳防重名 (或简单 voice.ogg)
+                        import time
+                        await context.bot.send_voice(
+                            chat_id=chat.id,
+                            voice=voice_bytes,
+                            filename=f"voice_{int(time.time())}_{index}.ogg", 
+                            caption=None
+                        )
+                    except Exception as e:
+                        logger.error(f"TTS Bubble Failed: {e}")
+                        await context.bot.send_message(chat_id=chat.id, text=text_part)
+                else:
+                    # Fallback to text
+                    await context.bot.send_message(chat_id=chat.id, text=text_part)
+                
+                # 稍微间隔，避免消息乱序
+                await asyncio.sleep(0.3)
 
                     # 发送语音消息
                     from io import BytesIO

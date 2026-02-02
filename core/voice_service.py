@@ -123,6 +123,8 @@ class VoiceService:
             messages.extend(history_messages[-10:])
             
         # 3. 当前语音消息
+        logger.info(f"Preparing Audio Payload: WAV Size={len(wav_bytes)} bytes, Base64 Len={len(base64_audio)}")
+        
         user_content = [
             {
                 "type": "text",
@@ -140,6 +142,7 @@ class VoiceService:
 
         try:
             logger.info(f"VoiceChat: 调用模型 {asr_model} (Multimodal)...")
+            logger.debug(f"Payload Preview: {str(messages)[:500]}...") # Log payload start
             
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
             # 400 Bad Request Fix: gpt-audio-mini 依然需要 modalities=["text"] 吗？
