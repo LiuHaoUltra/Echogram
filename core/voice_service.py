@@ -103,11 +103,10 @@ class VoiceService:
             "You are currently processing a direct Voice Message from the user.\n"
             "Your output MUST strictly follow this XML structure:\n\n"
             "<transcript>...Transcribe the user's speech verbatim here...</transcript>\n"
-            "<chat>...Your natural, conversational reply here (following all Soul/Protocol rules)...</chat>\n\n"
+            "<chat>...Your natural, cohesive, conversational reply here (One single block is preferred for voice mode)...</chat>\n\n"
             "Example:\n"
-            "<transcript>你好，现在几点了？</transcript>\n"
-            "<chat>已经是晚上十点了。</chat>\n"
-            "<chat react=\"😴\">该睡觉啦！</chat>"
+            "<transcript>你好，最近怎么样？</transcript>\n"
+            "<chat react=\"😊\">我很好呀！这几天一直都在忙着学习新语言，你呢？今天过得开心吗？</chat>"
         )
         
         final_system_prompt = system_prompt + voice_protocol
