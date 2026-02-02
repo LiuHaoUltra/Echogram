@@ -226,7 +226,7 @@ class NewsPushService:
         memory_context = f"\n[群组长期记忆/上下文]:\n{group_memory}" if group_memory else "\n[群组长期记忆]: 无相关历史."
         sys_prompt_custom = settings_map.get("system_prompt", "")
         # 注意：此处 build_system_prompt 的参数需要确保正确
-        full_sys_prompt = prompt_builder.build_system_prompt(soul_prompt=sys_prompt_custom, dynamic_summary="") 
+        full_sys_prompt = prompt_builder.build_system_prompt(soul_prompt=sys_prompt_custom, dynamic_summary="", mode="text") 
         msgs = prompt_builder.build_agentic_speaker_messages(
             system_prompt=full_sys_prompt,
             source_name=source_name,

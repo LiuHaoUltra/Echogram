@@ -97,19 +97,13 @@ class VoiceService:
         
         # --- 构造多模态 Messages ---
         
-        # 1. System Prompt (注入语音模式协议)
-        voice_protocol = (
-            "\n\n# VOICE MODE PROTOCOL [CRITICAL]\n"
-            "You are currently processing a direct Voice Message from the user.\n"
-            "Your output MUST strictly follow this XML structure:\n\n"
-            "<transcript>...Transcribe the user's speech verbatim here...</transcript>\n"
-            "<chat>...Your natural, cohesive, conversational reply here (One single block is preferred for voice mode)...</chat>\n\n"
-            "Example:\n"
-            "<transcript>你好，最近怎么样？</transcript>\n"
-            "<chat react=\"😊\">我很好呀！这几天一直都在忙着学习新语言，你呢？今天过得开心吗？</chat>"
+        # 1. 构建 System Prompt (注入语音模式协议)
+        final_system_prompt = prompt_builder.build_system_prompt(
+            soul_prompt=system_prompt, # system_prompt passed to chat_with_voice contains the soul
+            timezone=await config_service.get_value("timezone", "UTC"),
+            dynamic_summary="",
+            mode="voice"
         )
-        
-        final_system_prompt = system_prompt + voice_protocol
         
         # 2. 构建上下文
         messages = []

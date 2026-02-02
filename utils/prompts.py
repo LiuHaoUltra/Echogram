@@ -25,8 +25,8 @@ class PromptBuilder:
 - 角色风格：默认风格
 """
 
-    # Protocol 模板：交互格式规范
-    PROTOCOL_TEMPLATE = """
+    # Protocol 模板：文字模式 (碎片化)
+    PROTOCOL_TEXT = """
 # 交互协议 (Protocol) [最高优先级]
 为了实现结构化、自然的交互，你必须**无条件**遵守以下输出格式：
 
@@ -39,30 +39,51 @@ class PromptBuilder:
   ✅ 正确：
   `<chat>我没事。</chat>`
   `<chat react="🥱">只是……</chat>`
-  `<chat>有点累。</chat>`
   `<chat reply="{{msg_id}}">你去忙吧。</chat>`
 
 ## (2) 标签属性 (Attributes)
 - **reply="ID"**：引用并回复特定消息。
-- **react="EMOJI"**：表情回应。**这是表达情绪的关键**，请高频使用。
-- **属性共存**：一个 `<chat>` 标签可以同时包含内容和属性。
+- **react="EMOJI"**：表情回应。
+  - **惜墨如金**：仅在情绪表达最强烈的瞬间使用。严禁在每一条回复、每一个气泡中都带 React。
+  - **唯一性原则**：通常一轮对话你只需要回复一个 React。如果你发送了多个气泡，请仅在其中最合适的一个气泡中添加 `react`。
+"""
 
-## (3) 表情回应 (Reaction)
-Telegram 仅支持特定标准表情。**请优先使用符合你当前情绪的以下表情**：
-- 推荐使用：🥰 (爱/害羞), 😨 (惊讶), 😢 (难过), 😴 (困/无语), ❤️ (喜欢), ✍ (记录), 🤝 (同感), 🤔 (思考), 👀 (观察)
-- 其他允许：👍, 🔥, 🎉, 💊, 👻 等基础表情。
+    # Protocol 模板：语音模式 (连贯性)
+    PROTOCOL_VOICE = """
+# 交互协议 (Protocol) [最高优先级]
+为了实现结构化、自然的语音交互，你必须**无条件**遵守以下输出格式：
 
-**关键规则**：
-不要使用生僻的 Emoji（如 📖, ⚙️, 🌸），如果想用，请寻找最接近的替代品（如用 ✍ 代替 📖）。
+## (1) 响应结构：连贯气泡 (Cohesive Bubbles)
+- **合并逻辑**：严禁发送多个音频。你必须将所有的回复内容、转折、动作描写，全部合并在**同一个** `<chat>` 标签内。
+- **语音转录 (Transcript)**：在 `<chat>` 之前，你必须先使用 `<transcript>` 标签完整转录用户发送的语音内容。
+- **示例 (Pattern)**：
+  <transcript>你好，最近怎么样？</transcript>
+  <chat react="😊">我很好呀！这几天一直都在忙着学习新语言，你呢？今天过得开心吗？</chat>
+
+## (2) 标签属性 (Attributes)
+- **react="EMOJI"**：表情回应。
+  - **极简原则**：仅在表达全局最核心的情绪时使用。严禁重复发送 React。
+- **转录约束**：`<transcript>` 内部必须且仅包含用户语音的逐字稿。
+"""
+
+    # 通用约束 (Constraints)
+    CONSTRAINTS_TEMPLATE = """
+## (3) 表情回应规范
+- 支持：🥰, 😨, 😢, 😴, ❤️, ✍, 🤝, 🤔, 👀, 👍, 🔥, 🎉
+- 严禁：滥用表情，严禁在无关内容中生硬加入 React。
 
 ## (4) 强制约束 (Constraints)
-- **唯一合法容器**：所有内容必须在 `<chat>` 内部，外层严禁任何文本。
+- **唯一合法容器**：所有内容必须在 `<chat>` (及语音模式下的 `<transcript>`) 内部，外层严禁任何文本。
+- **禁止重复 React**：严禁在单次回复的多个气泡中对同一个对象发送不同的 React，这会导致 UI 效果闪烁且无意义。
 - **严禁正文指令**：禁止在标签内部使用任何斜杠指令。
 """
 
     @classmethod
-    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = "") -> str:
-        """组装完整的 System Prompt"""
+    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = "", mode: str = "text") -> str:
+        """
+        组装完整的 System Prompt
+        :param mode: 'text' 或 'voice'
+        """
         import pytz
         try:
             tz = pytz.timezone(timezone)
@@ -96,11 +117,14 @@ Telegram 仅支持特定标准表情。**请优先使用符合你当前情绪的
             f"{raw_soul}"
         )
 
-        # 4. Protocol
-        protocol = cls.PROTOCOL_TEMPLATE
+        # 4. Protocol (基于模式动态选择)
+        protocol = cls.PROTOCOL_VOICE if mode == "voice" else cls.PROTOCOL_TEXT
+        
+        # 5. Constraints
+        constraints = cls.CONSTRAINTS_TEMPLATE
         
         # 最终组装
-        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol}"
+        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol}\n{constraints}"
 
 
     # Agentic 新闻过滤模板

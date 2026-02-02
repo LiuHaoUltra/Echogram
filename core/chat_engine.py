@@ -124,7 +124,8 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
         system_prompt = prompt_builder.build_system_prompt(
             system_prompt_custom, 
             timezone=timezone, 
-            dynamic_summary=dynamic_summary
+            dynamic_summary=dynamic_summary,
+            mode="text"
         )
         
         # 获取历史记录(用于上下文)
@@ -323,7 +324,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     system_content = prompt_builder.build_system_prompt(
         system_prompt_custom, 
         timezone=timezone, 
-        dynamic_summary=dynamic_summary
+        dynamic_summary=dynamic_summary,
+        mode="text"
     )
     
     # 安全转换配置值，范围 100-50000

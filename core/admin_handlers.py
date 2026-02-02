@@ -151,9 +151,10 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 2. 组装
     full_prompt = prompt_builder.build_system_prompt(
-        soul_prompt=soul_prompt,
-        timezone=timezone,
-        dynamic_summary=dynamic_summary
+        soul_prompt=soul_prompt, 
+        timezone=timezone, 
+        dynamic_summary=dynamic_summary,
+        mode="text"
     )
 
     # 3. 格式化页眉
