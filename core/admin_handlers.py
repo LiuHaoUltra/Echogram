@@ -140,33 +140,46 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. 获取配置与摘要
     from core.config_service import config_service
     from core.summary_service import summary_service
+    from core.voice_service import voice_service # 引入用于检测类型
     from utils.prompts import prompt_builder
     from config.settings import settings
     import html
+
+    # 1.1 检测最后的交互模式
+    try:
+        last_msg_type = await voice_service.get_last_user_message_type(chat.id)
+        mode = "voice" if last_msg_type == "voice" else "text"
+    except Exception as e:
+        logger.warning(f"Failed to detect last message type for {chat.id}, fallback to 'text': {e}")
+        mode = "text"
 
     dynamic_summary = await summary_service.get_summary(chat.id)
     configs = await config_service.get_all_settings()
     soul_prompt = configs.get("system_prompt")
     timezone = configs.get("timezone", "UTC")
 
-    # 2. 组装
+    # 2. 组装 (根据检测到的 mode 动态组装)
     full_prompt = prompt_builder.build_system_prompt(
         soul_prompt=soul_prompt, 
         timezone=timezone, 
         dynamic_summary=dynamic_summary,
-        mode="text"
+        mode=mode
     )
 
     # 3. 格式化页眉
     from datetime import datetime
     import pytz
-    now_str = datetime.now(pytz.timezone(timezone)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        now_str = datetime.now(pytz.timezone(timezone)).strftime("%Y-%m-%d %H:%M:%S")
+    except:
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") + " (UTC)"
     
     header = (
         f"🔍 <b>System Prompt Preview</b>\n"
         f"━━━━━━━━━━━━━━━\n"
         f"<b>Chat ID:</b> <code>{chat.id}</code>\n"
         f"<b>Chat Name:</b> {chat.title}\n"
+        f"<b>Detected Mode:</b> <code>{mode.upper()}</code>\n"
         f"<b>Generated At:</b> {now_str}\n"
         f"━━━━━━━━━━━━━━━\n\n"
     )

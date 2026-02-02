@@ -40,7 +40,7 @@ class VoiceService:
         
         return is_enabled and bool(tts_url) and bool(tts_ref_audio)
     
-    async def chat_with_voice(self, voice_file_bytes: bytes, system_prompt: str, history_messages: list) -> str:
+    async def chat_with_voice(self, voice_file_bytes: bytes, system_prompt: str, history_messages: list, chat_id: int) -> str:
         """
         语音多模态对话 (Multimodal Audio-to-Text)
         
@@ -48,6 +48,7 @@ class VoiceService:
             voice_file_bytes: 原始语音文件 (OGG)
             system_prompt: 当前人格设定的 System Prompt
             history_messages: 历史对话上下文 (OpenAI 格式列表)
+            chat_id: 当前会话 ID
             
         Returns:
             str: 原始 LLM 响应，包含 <transcript> 和 <chat> 标签
@@ -99,10 +100,20 @@ class VoiceService:
         # --- 构造多模态 Messages ---
         
         # 1. 构建 System Prompt (注入语音模式协议)
+        # 修正：现在 system_prompt 参数传入的是原始人设，这里需要亲自获取摘要
+        from core.summary_service import summary_service
+        dynamic_summary = await summary_service.get_summary(chat_id)
+        # 更稳健做法：在 chat_with_voice 外部组装，但这样又会回到嵌套。
+        # 决定：由 chat_engine 仅传 Soul，这里负责组装核心协议。
+        
+        # 重新获取配置以保证新鲜度
+        timezone = await config_service.get_value("timezone", "UTC")
+        # 注意：为了避免循环引用，summary_service 已通过 local import
+        
         final_system_prompt = prompt_builder.build_system_prompt(
-            soul_prompt=system_prompt, # system_prompt passed to chat_with_voice contains the soul
-            timezone=await config_service.get_value("timezone", "UTC"),
-            dynamic_summary="",
+            soul_prompt=system_prompt, # 这里就是原始人设
+            timezone=timezone,
+            dynamic_summary=dynamic_summary,
             mode="voice"
         )
         

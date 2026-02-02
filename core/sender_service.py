@@ -33,6 +33,10 @@ class SenderService:
         :param history_msgs: 历史消息列表 (用于兜底表情回应目标)
         :param message_type: 'text' 或 'voice'。若为 'voice' 且 ASR/TTS 已配置，则发送语音。
         """
+        if message_type == 'text':
+            # 强制过滤转录标签 (防止模型在文字模式下误触语音协议产生转录块)
+            reply_content = re.sub(r"<transcript>.*?</transcript>", "", reply_content, flags=re.DOTALL).strip()
+
         # 1. 解析标签
         tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
         matches = list(re.finditer(tag_pattern, reply_content, flags=re.DOTALL))
@@ -174,9 +178,9 @@ class SenderService:
             # 确定目标 ID
             react_target_id = react_id or target_reply_id
             if not react_target_id and history_msgs:
-                last_user_msg = next((m for m in reversed(history_msgs) if m.role == 'user'), None)
+                last_user_msg = next((m for m in reversed(history_msgs) if m.get('role') == 'user'), None)
                 if last_user_msg:
-                    react_target_id = last_user_msg.message_id
+                    react_target_id = last_user_msg.get('message_id')
             
             if react_target_id:
                 await context.bot.set_message_reaction(

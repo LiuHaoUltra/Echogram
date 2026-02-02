@@ -117,34 +117,24 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
         file = await context.bot.get_file(voice.file_id)
         voice_bytes = await file.download_as_bytearray()
         
-        # 获取系统提示词 (复用 generate_response 逻辑)
+        # 获取系统提示词 (仅获取 Soul Prompt，不提前组装，避免嵌套和 Mode 错误)
         configs = await config_service.get_all_settings()
         system_prompt_custom = configs.get("system_prompt")
-        timezone = configs.get("timezone", "UTC")
-        dynamic_summary = await summary_service.get_summary(chat.id)
-        
-        system_prompt = prompt_builder.build_system_prompt(
-            system_prompt_custom, 
-            timezone=timezone, 
-            dynamic_summary=dynamic_summary,
-            mode="text"
-        )
         
         # 获取历史记录(用于上下文)
         history_objs = await history_service.get_recent_messages(chat.id, limit=20)
         history_context = []
         for h in history_objs:
             role = h.role
-            # 将历史中的 system 角色映射为 user 角色以便模型理解(可选，或保持 system)
-            # 这里保持原样
             history_context.append({"role": role, "content": h.content})
             
         # 调用 Voice Service (多模态对话)
         # 返回: <transcript>...</transcript><chat>...</chat>
         xml_response = await voice_service.chat_with_voice(
             bytes(voice_bytes), 
-            system_prompt, 
-            history_context
+            system_prompt_custom, # 传递原始自定义提示词，内层会正确处理模式
+            history_context,
+            chat_id=chat_id
         )
         
         if not xml_response:
