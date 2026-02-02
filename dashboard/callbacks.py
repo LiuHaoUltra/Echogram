@@ -257,15 +257,27 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     
     if data == "toggle_tts":
         current_val = await config_service.get_value("tts_enabled", "false")
+        # 强健的布尔转换
         is_enabled = str(current_val).strip().lower() in ("true", "1", "yes")
+        
+        # 翻转并写入
         new_val = "false" if is_enabled else "true"
         await config_service.set_value("tts_enabled", new_val)
         
-        status = "已启用 ✅" if new_val == "true" else "已禁用 ❌"
-        await query.answer(f"TTS 功能 {status}")
+        # 立即读取确认 (Double Check)
+        saved_val = await config_service.get_value("tts_enabled")
+        from utils.logger import logger
+        logger.info(f"Dashboard: TTS toggled from {current_val} to {new_val} (Saved: {saved_val})")
         
-        # 刷新菜单
-        await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=get_voice_keyboard(), parse_mode="HTML")
+        status = "已启用 ✅" if new_val == "true" else "已禁用 ❌"
+        
+        try:
+            await query.answer(f"TTS 功能 {status}")
+            # 刷新菜单
+            await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=get_voice_keyboard(), parse_mode="HTML")
+        except Exception:
+            pass # 忽略刷新错误
+            
         return ConversationHandler.END
 
     # --- 6. 新闻推送 (News Push) 管理 ---
