@@ -476,48 +476,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 
                 # 稍微间隔，避免消息乱序
                 await asyncio.sleep(0.3)
+                    
 
-                    # 发送语音消息
-                    from io import BytesIO
-                    await context.bot.send_voice(
-                        chat_id=chat_id,
-                        voice=BytesIO(voice_bytes),
-                        reply_to_message_id=reply_to_msg_id
-                    )
-                    
-                    logger.info(f"Voice reply sent successfully")
-                    return
-                    
-                else:
-                    # TTS 未配置，降级为文字回复
-                    logger.warning("TTS not configured, fallback to text reply")
-                    await sender_service.send_llm_reply(
-                        chat_id=chat_id,
-                        reply_content=reply_content,
-                        context=context,
-                        history_msgs=history_msgs
-                    )
-                    return
-                    
-            except TTSNotConfiguredError as e:
-                logger.warning(f"TTS not configured: {e}")
-                await sender_service.send_llm_reply(
-                    chat_id=chat_id,
-                    reply_content=reply_content,
-                    context=context,
-                    history_msgs=history_msgs
-                )
-                return
-            except Exception as e:
-                logger.error(f"TTS failed: {e}, fallback to text")
-                # TTS 失败，降级为文字回复
-                await sender_service.send_llm_reply(
-                    chat_id=chat_id,
-                    reply_content=reply_content,
-                    context=context,
-                    history_msgs=history_msgs
-                )
-                return
         
         # 默认文字回复
         await sender_service.send_llm_reply(
