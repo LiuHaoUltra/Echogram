@@ -205,11 +205,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=await get_voice_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
     
-    if data == "set_asr_model":
-        # 使用模型选择面板
-        await show_model_selection_panel(update, context, target="asr", header_text="🎙️ <b>ASR 模型选择</b>\n\n选择用于语音识别的模型：")
-        from dashboard.states import WAITING_INPUT_ASR_MODEL
-        return WAITING_INPUT_ASR_MODEL
+
     
     if data == "set_tts_url":
         current_val = await config_service.get_value("tts_api_url", "未配置")

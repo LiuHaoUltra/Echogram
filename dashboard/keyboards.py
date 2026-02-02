@@ -83,7 +83,7 @@ async def get_voice_keyboard() -> InlineKeyboardMarkup:
     toggle_data = "toggle_tts"
     
     keyboard = [
-        [InlineKeyboardButton("🎙️ 配置 ASR 模型", callback_data="set_asr_model")],
+
         [InlineKeyboardButton("🔊 配置 TTS (URL)", callback_data="set_tts_url")],
         [InlineKeyboardButton("🎵 配置参考音频", callback_data="set_tts_ref_audio")],
         [InlineKeyboardButton("🌐 设置 TTS 语言", callback_data="set_tts_lang")],

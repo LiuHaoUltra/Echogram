@@ -6,16 +6,13 @@ from openai import AsyncOpenAI
 
 from core.config_service import config_service
 from utils.logger import logger
+from utils.config_validator import safe_float_config
 
 
 class VoiceServiceError(Exception):
     """语音服务基础异常"""
     pass
 
-
-class ASRNotConfiguredError(VoiceServiceError):
-    """ASR 模型未配置"""
-    pass
 
 
 class TTSNotConfiguredError(VoiceServiceError):
@@ -26,10 +23,7 @@ class TTSNotConfiguredError(VoiceServiceError):
 class VoiceService:
     """语音服务：ASR（语音转文字）和 TTS（文字转语音）"""
     
-    async def is_asr_configured(self) -> bool:
-        """检查 ASR 是否已配置"""
-        asr_model = await config_service.get_value("asr_model_name")
-        return bool(asr_model)
+    # is_asr_configured 已移除 (统一使用主模型)
     
     async def is_tts_configured(self) -> bool:
         """检查 TTS 是否已配置"""
@@ -59,10 +53,13 @@ class VoiceService:
         """
         api_key = await config_service.get_value("api_key")
         base_url = await config_service.get_value("api_base_url")
-        asr_model = await config_service.get_value("asr_model_name") # 复用 ASR 模型配置作为语音模型名称
+        model_name = await config_service.get_value("model_name") 
+        if not model_name:
+             # Fallback if not set (unlikely)
+             model_name = "gpt-4o-audio-preview"
         
         if not api_key:
-            raise ASRNotConfiguredError("API Key 未配置")
+            raise VoiceServiceError("API Key 未配置")
         
         # Base64 编码音频 (OGG -> WAV 转换)
         # OpenAI Chat API 不支持 OGG，需转换为 WAV
@@ -142,17 +139,21 @@ class VoiceService:
         messages.append({"role": "user", "content": user_content})
 
         try:
-            logger.info(f"VoiceChat: 调用模型 {asr_model} (Multimodal)...")
+            logger.info(f"VoiceChat: 调用模型 {model_name} (Multimodal)...")
             logger.debug(f"Payload Preview: {str(messages)[:500]}...") # Log payload start
             
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
             # 400 Bad Request Fix: gpt-audio-mini 依然需要 modalities=["text"] 吗？
             # 官方文档显示 Audio Output 暂未完全开放 API (即 modalities=["audio", "text"])，
-            # 这里我们只请求文字回复，所以保持 modalities=["text"] 是安全的，甚至可能是必须的。
+            # 这里我们只请求文字回复，所以保持 modalities=["text"] 是一安全的，甚至可能是必须的。
+            # 获取 Temperature
+            temp_val = await config_service.get_value("temperature", "0.7")
+            temperature = safe_float_config(temp_val, 0.7, 0.0, 2.0)
+
             response = await client.chat.completions.create(
-                model=asr_model,
+                model=model_name,
                 messages=messages,
-                temperature=0.7, # 稍微允许一点创造性，反正有 transcript 约束
+                temperature=temperature,
                 modalities=["text"]
             )
             

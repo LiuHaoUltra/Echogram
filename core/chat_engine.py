@@ -12,7 +12,7 @@ from core.summary_service import summary_service
 from config.settings import settings
 from core.secure import is_admin
 from core.lazy_sender import lazy_sender
-from core.voice_service import voice_service, ASRNotConfiguredError, TTSNotConfiguredError, VoiceServiceError
+from core.voice_service import voice_service, TTSNotConfiguredError, VoiceServiceError
 from utils.logger import logger
 from utils.prompts import prompt_builder
 from utils.config_validator import safe_int_config, safe_float_config
