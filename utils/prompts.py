@@ -128,6 +128,21 @@ class PromptBuilder:
         return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol}\n{constraints}"
 
 
+    @classmethod
+    def build_memory_block(cls, dynamic_summary: str = "") -> str:
+        """生成长期记忆摘要板块"""
+        if dynamic_summary:
+            return (
+                "\n# 长期记忆 (Long-term Memory)\n"
+                "> [Memory Summary] 以下是基于历史对话的长期记忆摘要，仅供参考。\n"
+                f"{dynamic_summary}\n"
+            )
+        else:
+            return (
+                "\n# 长期记忆 (Long-term Memory)\n"
+                "> [Memory Summary] (New User / No Summary)\n"
+            )
+
     # Agentic 新闻过滤模板
     AGENTIC_FILTER_TEMPLATE = """你是一个新闻过滤器。
 任务：判断这条新闻是否值得推送给一个关注【技术、开发、ACG、极客文化】的群组。

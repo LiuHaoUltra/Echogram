@@ -153,17 +153,21 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning(f"Failed to detect last message type for {chat.id}, fallback to 'text': {e}")
         mode = "text"
 
-    dynamic_summary = await summary_service.get_summary(chat.id)
+    dynamic_summary_raw = await summary_service.get_summary(chat.id)
     configs = await config_service.get_all_settings()
-    # 2. 获取静态协议
+    soul_prompt = configs.get("system_prompt")
+    timezone = configs.get("timezone", "UTC")
+
+    # 2. 组装静态协议 (显式传入 None，使其在第一部分预览中完全不拼装摘要块)
     full_static_prompt = prompt_builder.build_system_prompt(
         soul_prompt=soul_prompt, 
         timezone=timezone, 
+        dynamic_summary=None,
         mode=mode
     )
 
     # 2.1 获取动态记忆部分 (摘要 + 历史上下文)
-    memory_block = prompt_builder.build_memory_block(dynamic_summary)
+    memory_block = prompt_builder.build_memory_block(dynamic_summary_raw)
     
     from core.history_service import history_service
     target_tokens = int(configs.get("history_tokens", settings.HISTORY_WINDOW_TOKENS))
