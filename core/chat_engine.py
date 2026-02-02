@@ -386,17 +386,10 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         if last_message_type == "voice":
             # 用户最后一条消息是语音 → 尝试语音回复
             try:
-                if await voice_service.is_tts_configured():
-                    logger.info(f"TTS Mode: Generating voice reply...")
-                    
-                    # --- 1. 解析 LLM 输出 (提取文字 & 表情) ---
-                    # 参考 SenderService 的解析逻辑
-                    # 匹配标签: <chat attr="...">content</chat>
-                    tag_pattern = r"<chat(?P<attrs>[^>]*)>(?P<content>.*?)</chat>"
-                    match = re.search(tag_pattern, reply_content, flags=re.DOTALL)
-                    
-                    clean_text = reply_content
-                    react_emoji = None
+                pass # Continue to processing
+            except Exception:
+                pass
+
         # --- 5. 处理回复 (Multi-Bubble) ---
         # 提取所有 <chat> 标签 (Tag Block) 包括属性和内容
         # 正则说明: 匹配 (<chat[^>]*>.*?</chat>)，提取完整块
