@@ -228,6 +228,17 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         context.user_data['last_panel_id'] = query.message.message_id
         from dashboard.states import WAITING_INPUT_TTS_REF_AUDIO
         return WAITING_INPUT_TTS_REF_AUDIO
+
+    if data == "set_tts_ref_text":
+        current_val = await config_service.get_value("tts_ref_text", "未配置")
+        await query.edit_message_text(
+            text=f"📝 <b>设置参考音频文本</b>\n\n当前: <code>{current_val}</code>\n\n请输入参考音频中实际说的话（用于提高合成精度，支持 0-shot 加速）",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_TTS_REF_TEXT
+        return WAITING_INPUT_TTS_REF_TEXT
     
     if data == "set_tts_lang":
         current_val = await config_service.get_value("tts_text_lang", "zh")

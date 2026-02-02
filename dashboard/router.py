@@ -14,13 +14,14 @@ def get_dashboard_handlers():
     """
     
     # 匹配入口按钮
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_tts_url|set_tts_ref_audio|set_tts_lang|set_tts_speed)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_tts_url|set_tts_ref_audio|set_tts_ref_text|set_tts_lang|set_tts_speed)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(menu_navigation_callback, pattern=entry_pattern),
         ],
         states={
+            # ... ( API settings ... )
             WAITING_INPUT_API_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_api_url)],
             WAITING_INPUT_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_api_key)],
             WAITING_INPUT_AGGREGATION_LATENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_aggregation_latency)],
@@ -49,9 +50,9 @@ def get_dashboard_handlers():
             WAITING_INPUT_ACTIVE_HOURS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_active_hours)],
             WAITING_INPUT_IDLE_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_idle_threshold)],
             # 语音配置
-
             WAITING_INPUT_TTS_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_url_input)],
             WAITING_INPUT_TTS_REF_AUDIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_ref_audio_input)],
+            WAITING_INPUT_TTS_REF_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_ref_text_input)],
             WAITING_INPUT_TTS_LANG: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_lang_input)],
             WAITING_INPUT_TTS_SPEED: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_speed_input)]
         },

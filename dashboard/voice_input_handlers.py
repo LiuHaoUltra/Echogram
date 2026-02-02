@@ -54,6 +54,29 @@ async def handle_tts_ref_audio_input(update: Update, context: ContextTypes.DEFAU
     return ConversationHandler.END
 
 
+async def handle_tts_ref_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 TTS 参考音频文本输入"""
+    text = update.message.text.strip()
+    await config_service.set_value("tts_ref_text", text)
+    
+    await update.message.reply_text(f"✅ 参考音频文本已设置为: {text}")
+    
+    # 返回主菜单
+    overview = await get_dashboard_overview_text(update.effective_chat.id)
+    panel_id = context.user_data.get('last_panel_id')
+    
+    if panel_id:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=panel_id,
+            text=overview,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="HTML"
+        )
+    
+    return ConversationHandler.END
+
+
 async def handle_tts_lang_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理 TTS 语言输入"""
     lang = update.message.text.strip().lower()

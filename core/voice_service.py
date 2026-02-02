@@ -217,7 +217,7 @@ class VoiceService:
             "text_lang": await config_service.get_value("tts_text_lang", "zh"),
             "ref_audio_path": tts_ref_audio,
             "prompt_lang": await config_service.get_value("tts_prompt_lang", "zh"),
-            "prompt_text": "",
+            "prompt_text": await config_service.get_value("tts_ref_text", ""),
             "media_type": "wav",  # 使用 WAV 作为中间格式，便于后续标准 OPUS 转换
             "speed_factor": speed_factor
         }

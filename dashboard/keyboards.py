@@ -86,6 +86,7 @@ async def get_voice_keyboard() -> InlineKeyboardMarkup:
 
         [InlineKeyboardButton("🔊 配置 TTS (URL)", callback_data="set_tts_url")],
         [InlineKeyboardButton("🎵 配置参考音频", callback_data="set_tts_ref_audio")],
+        [InlineKeyboardButton("📝 配置参考文本", callback_data="set_tts_ref_text")],
         [InlineKeyboardButton("🌐 设置 TTS 语言", callback_data="set_tts_lang")],
         [InlineKeyboardButton("⚡ 设置语速倍率", callback_data="set_tts_speed")],
         [InlineKeyboardButton(toggle_text, callback_data=toggle_data)],  # 动态文本
