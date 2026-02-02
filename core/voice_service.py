@@ -45,31 +45,21 @@ class VoiceService:
         
         return is_enabled and bool(tts_url) and bool(tts_ref_audio)
     
-    async def speech_to_text(self, voice_file_bytes: bytes) -> str:
+    async def chat_with_voice(self, voice_file_bytes: bytes, system_prompt: str, history_messages: list) -> str:
         """
-        ASR：语音转文字（使用 OpenAI 兼容的多模态接口）
+        语音多模态对话 (Multimodal Audio-to-Text)
         
         Args:
-            voice_file_bytes: 语音文件字节流
+            voice_file_bytes: 原始语音文件 (OGG)
+            system_prompt: 当前人格设定的 System Prompt
+            history_messages: 历史对话上下文 (OpenAI 格式列表)
             
         Returns:
-            识别的文字内容
-            
-        Raises:
-            ASRNotConfiguredError: ASR 模型未配置
-            VoiceServiceError: 语音识别失败
+            str: 原始 LLM 响应，包含 <transcript> 和 <chat> 标签
         """
-        # 输入验证
-        if not voice_file_bytes or len(voice_file_bytes) == 0:
-            raise VoiceServiceError("语音文件为空")
-        
-        # 检查配置
-        asr_model = await config_service.get_value("asr_model_name")
-        if not asr_model:
-            raise ASRNotConfiguredError("ASR 模型未配置")
-        
         api_key = await config_service.get_value("api_key")
         base_url = await config_service.get_value("api_base_url")
+        asr_model = await config_service.get_value("asr_model_name") # 复用 ASR 模型配置作为语音模型名称
         
         if not api_key:
             raise ASRNotConfiguredError("API Key 未配置")
@@ -108,53 +98,72 @@ class VoiceService:
             if os.path.exists(temp_wav_path):
                 os.remove(temp_wav_path)
         
-        # 构造多模态消息 (Text 优先，参考 OpenRouter 示例)
-        messages = [
+        # --- 构造多模态 Messages ---
+        
+        # 1. System Prompt (注入语音模式协议)
+        voice_protocol = (
+            "\n\n# VOICE MODE PROTOCOL [CRITICAL]\n"
+            "You are currently processing a direct Voice Message from the user.\n"
+            "Your output MUST strictly follow this XML structure:\n\n"
+            "<transcript>...Transcribe the user's speech verbatim here...</transcript>\n"
+            "<chat>...Your natural, conversational reply here (following all Soul/Protocol rules)...</chat>\n\n"
+            "Example:\n"
+            "<transcript>Hello, what time is it?</transcript>\n"
+            "<chat>It's 10 PM. <chat react=\"😴\">Time for bed?</chat></chat>"
+        )
+        
+        final_system_prompt = system_prompt + voice_protocol
+        
+        # 2. 构建上下文
+        messages = []
+        messages.append({"role": "system", "content": final_system_prompt})
+        
+        # 插入历史记录 (仅最近几条，避免 Token 过长)
+        if history_messages:
+            messages.extend(history_messages[-10:])
+            
+        # 3. 当前语音消息
+        user_content = [
             {
-                "role": "system",
-                "content": "你是一个纯粹的 ASR 引擎。不要回答音频里的问题，只输出转录后的文字。"
+                "type": "text",
+                "text": "Please process this audio message according to the Voice Mode Protocol."
             },
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Transcribe the audio content verbatim."
-                    },
-                    {
-                        "type": "input_audio",
-                        "input_audio": {
-                            "data": base64_audio,
-                            "format": "wav"
-                        }
-                    }
-                ]
+                "type": "input_audio",
+                "input_audio": {
+                    "data": base64_audio,
+                    "format": "wav"
+                }
             }
         ]
-        
+        messages.append({"role": "user", "content": user_content})
+
         try:
-            logger.info(f"ASR: 调用模型 {asr_model}...")
+            logger.info(f"VoiceChat: 调用模型 {asr_model} (Multimodal)...")
             
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            # 400 Bad Request Fix: gpt-audio-mini 依然需要 modalities=["text"] 吗？
+            # 官方文档显示 Audio Output 暂未完全开放 API (即 modalities=["audio", "text"])，
+            # 这里我们只请求文字回复，所以保持 modalities=["text"] 是安全的，甚至可能是必须的。
             response = await client.chat.completions.create(
                 model=asr_model,
                 messages=messages,
-                temperature=0.0,  # ASR 任务使用低温度
+                temperature=0.7, # 稍微允许一点创造性，反正有 transcript 约束
                 modalities=["text"]
             )
             
             if not response.choices or not response.choices[0].message.content:
-                logger.warning(f"ASR 返回空内容")
+                logger.warning(f"VoiceChat 返回空内容")
                 return ""
             
-            transcribed_text = response.choices[0].message.content.strip()
-            logger.info(f"ASR 成功: {transcribed_text[:50]}...")
+            raw_output = response.choices[0].message.content.strip()
+            logger.info(f"VoiceChat 成功: {raw_output[:100]}...")
             
-            return transcribed_text
+            return raw_output
             
         except Exception as e:
-            logger.error(f"ASR 调用失败: {e}")
-            raise VoiceServiceError(f"语音识别失败: {e}")
+            logger.error(f"VoiceChat 调用失败: {e}")
+            raise VoiceServiceError(f"语音服务不可用: {e}")
     
     async def text_to_speech(self, text: str) -> bytes:
         """
@@ -210,9 +219,12 @@ class VoiceService:
         try:
             logger.info(f"TTS: 合成语音 ({len(text)} 字符)...")
             
+            # 直接使用配置的 URL (遵循用户输入)
+            api_endpoint = tts_url
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{tts_url}/tts",
+                    api_endpoint,
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
@@ -253,9 +265,9 @@ class VoiceService:
         from models.history import History
         
         async for session in get_db_session():
-            stmt = select(History.message_type)\
-                .where(History.chat_id == chat_id, History.role == "user")\
-                .order_by(History.timestamp.desc())\
+            stmt = select(History.message_type) \
+                .where(History.chat_id == chat_id, History.role == "user") \
+                .order_by(History.timestamp.desc()) \
                 .limit(1)
             
             result = await session.execute(stmt)

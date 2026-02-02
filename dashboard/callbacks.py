@@ -202,7 +202,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
 
     # --- 5. 语音配置 (Voice) ---
     if data == "menu_voice":
-        await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=get_voice_keyboard(), parse_mode="HTML")
+        await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=await get_voice_keyboard(), parse_mode="HTML")
         return ConversationHandler.END
     
     if data == "set_asr_model":
@@ -274,7 +274,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         try:
             await query.answer(f"TTS 功能 {status}")
             # 刷新菜单
-            await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=get_voice_keyboard(), parse_mode="HTML")
+            await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=await get_voice_keyboard(), parse_mode="HTML")
         except Exception:
             pass # 忽略刷新错误
             
