@@ -261,7 +261,7 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
 
             # 拟人化时长 (根据文字长度模拟录音时间)
             duration = min(len(text_part) * 0.2, 5.0)
-            await context.bot.send_chat_action(chat_id=chat.id, action=constants.ChatAction.RECORD_VOICE)
+            await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
             await asyncio.sleep(duration)
 
             # 发送 TTS
@@ -459,7 +459,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     target_id = reply_to_target if reply_to_target else message.message_id
                     from telegram import ReactionTypeEmoji
                     await context.bot.set_message_reaction(
-                        chat_id=chat.id,
+                        chat_id=chat_id,
                         message_id=target_id,
                         reaction=[ReactionTypeEmoji(react_emoji)]
                     )
@@ -473,30 +473,30 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             if text_part:
                 # 拟人化时长
                 duration = min(len(text_part) * 0.2, 5.0)
-                await context.bot.send_chat_action(chat_id=chat.id, action=constants.ChatAction.RECORD_VOICE)
+                await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
                 await asyncio.sleep(duration)
                 
                 if await voice_service.is_tts_configured():
                     try:
                         voice_bytes = await voice_service.text_to_speech(text_part)
                         
-                        await context.bot.send_chat_action(chat_id=chat.id, action=constants.ChatAction.UPLOAD_VOICE)
+                        await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
                         
                         # 显式指定 filename 解决 0:00 bug
                         # 使用时间戳防重名 (或简单 voice.ogg)
                         import time
                         await context.bot.send_voice(
-                            chat_id=chat.id,
+                            chat_id=chat_id,
                             voice=voice_bytes,
                             filename=f"voice_{int(time.time())}_{index}.ogg", 
                             caption=None
                         )
                     except Exception as e:
                         logger.error(f"TTS Bubble Failed: {e}")
-                        await context.bot.send_message(chat_id=chat.id, text=text_part)
+                        await context.bot.send_message(chat_id=chat_id, text=text_part)
                 else:
                     # Fallback to text
-                    await context.bot.send_message(chat_id=chat.id, text=text_part)
+                    await context.bot.send_message(chat_id=chat_id, text=text_part)
                 
                 # 稍微间隔，避免消息乱序
                 await asyncio.sleep(0.3)
