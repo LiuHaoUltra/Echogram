@@ -154,6 +154,7 @@ class VoiceService:
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
+                max_tokens=4000,
                 modalities=["text"]
             )
             
