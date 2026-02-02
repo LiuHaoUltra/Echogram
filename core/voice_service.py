@@ -218,7 +218,7 @@ class VoiceService:
             "ref_audio_path": tts_ref_audio,
             "prompt_lang": await config_service.get_value("tts_prompt_lang", "zh"),
             "prompt_text": "",
-            "media_type": "ogg",  # Telegram 兼容格式
+            "media_type": "wav",  # 使用 WAV 作为中间格式，便于后续标准 OPUS 转换
             "speed_factor": speed_factor
         }
         
@@ -228,20 +228,43 @@ class VoiceService:
             # 直接使用配置的 URL (遵循用户输入)
             api_endpoint = tts_url
 
+            # 发起请求获取原始音频
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     api_endpoint,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    timeout=aiohttp.ClientTimeout(total=45) # 稍微增加超时
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         raise VoiceServiceError(f"TTS API 返回错误: {response.status} - {error_text}")
                     
-                    audio_bytes = await response.read()
-                    logger.info(f"TTS 成功: 生成 {len(audio_bytes)} 字节语音文件")
+                    raw_audio_bytes = await response.read()
                     
-                    return audio_bytes
+                    # 2. 使用 ffmpeg (通过 pydub) 转换为标准 Telegram 语音格式 (OGG/OPUS)
+                    logger.info("TTS: 正在进行标准 OGG/OPUS 编码转换...")
+                    try:
+                        from pydub import AudioSegment
+                        import io
+                        
+                        # 加载原始音频 (WAV)
+                        audio = AudioSegment.from_file(io.BytesIO(raw_audio_bytes), format="wav")
+                        
+                        # 导出为 OGG，指定使用 libopus 编码器
+                        # 注意：Telegram 核心要求是 opus 编码，封装在 ogg 容器中
+                        buffer = io.BytesIO()
+                        audio.export(buffer, format="ogg", codec="libopus")
+                        
+                        standard_audio_bytes = buffer.getvalue()
+                        logger.info(f"TTS 成功: 生成并转换 {len(standard_audio_bytes)} 字节标准语音文件")
+                        
+                        return standard_audio_bytes
+                        
+                    except Exception as e:
+                        logger.error(f"TTS 音频格式强制转换失败: {e}")
+                        # 兜底：如果转换失败，返回原始字节流（或者抛出错误）
+                        # 考虑到稳定性，这里抛出错误，因为非标准格式发出去也会导致 UI 问题
+                        raise VoiceServiceError(f"语音格式转换失败 (请确认环境已安装 ffmpeg): {e}")
                     
         except TTSNotConfiguredError:
             # 重新抛出配置错误
