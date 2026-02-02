@@ -155,16 +155,30 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     dynamic_summary = await summary_service.get_summary(chat.id)
     configs = await config_service.get_all_settings()
-    soul_prompt = configs.get("system_prompt")
-    timezone = configs.get("timezone", "UTC")
-
-    # 2. 组装 (根据检测到的 mode 动态组装)
-    full_prompt = prompt_builder.build_system_prompt(
+    # 2. 获取静态协议
+    full_static_prompt = prompt_builder.build_system_prompt(
         soul_prompt=soul_prompt, 
         timezone=timezone, 
-        dynamic_summary=dynamic_summary,
         mode=mode
     )
+
+    # 2.1 获取动态记忆部分 (摘要 + 历史上下文)
+    memory_block = prompt_builder.build_memory_block(dynamic_summary)
+    
+    from core.history_service import history_service
+    target_tokens = int(configs.get("history_tokens", settings.HISTORY_WINDOW_TOKENS))
+    history_msgs = await history_service.get_token_controlled_context(chat.id, target_tokens=target_tokens)
+    
+    # 构建动态预览块
+    dynamic_preview = memory_block.strip() # 包含长期记忆头
+    
+    # B. 最近上下文
+    dynamic_preview += "\n\n# 最近上下文 (Recent Context)\n"
+    if not history_msgs:
+        dynamic_preview += "> (No recent history)"
+    else:
+        for m in history_msgs:
+            dynamic_preview += f"[{m.role.upper()}]: {m.content[:200]}{'...' if len(m.content) > 200 else ''}\n"
 
     # 3. 格式化页眉
     from datetime import datetime
@@ -184,19 +198,28 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━\n\n"
     )
 
-    # 4. 发送私聊
+    # 4. 分段发送私聊
     try:
-        safe_prompt = html.escape(full_prompt)
-        # 如果超长则分段或截断（Telegram 限制 4096）
-        content = f"{header}<pre>{safe_prompt}</pre>"
-        if len(content) > 4000:
-             content = content[:3900] + "\n\n... (Truncated)"
+        # 第一部分：静态协议与人设
+        safe_static = html.escape(full_static_prompt)
+        content_static = f"{header}<b>[1/2] System Protocol (Static)</b>\n<pre>{safe_static}</pre>"
+        if len(content_static) > 4000:
+             content_static = content_static[:3900] + "\n\n... (Static Part Truncated)"
         
-        await context.bot.send_message(user.id, content, parse_mode='HTML')
-        await update.message.reply_text("✅ 提示词预览已发送至您的私聊。")
+        await context.bot.send_message(user.id, content_static, parse_mode='HTML')
+        
+        # 第二部分：动态记忆与上下文
+        safe_dynamic = html.escape(dynamic_preview)
+        content_dynamic = f"<b>[2/2] Memory & Context (Dynamic)</b>\n<pre>{safe_dynamic}</pre>"
+        if len(content_dynamic) > 4000:
+             content_dynamic = content_dynamic[:3900] + "\n\n... (Dynamic Part Truncated)"
+
+        await context.bot.send_message(user.id, content_dynamic, parse_mode='HTML')
+        
+        await update.message.reply_text("✅ 提示词预览已分段发送：[1] 静态协议, [2] 动态记忆。")
     except Exception as e:
         logger.error(f"Failed to send prompt preview: {e}")
-        await update.message.reply_text("❌ 无法发送私聊消息，请确保您已私聊过机器人并点击了 /start。")
+        await update.message.reply_text("❌ 无法发送私聊消息，请确保您已私聊过机器人。")
 
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """

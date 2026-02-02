@@ -79,7 +79,7 @@ class PromptBuilder:
 """
 
     @classmethod
-    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = "", mode: str = "text") -> str:
+    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = None, mode: str = "text") -> str:
         """
         组装完整的 System Prompt
         :param mode: 'text' 或 'voice'
@@ -96,19 +96,20 @@ class PromptBuilder:
         # 1. Kernel
         kernel = cls.KERNEL_TEMPLATE.format(current_time=current_time)
         
-        # 2. Memory
+        # 2. Memory (如果传入 None，则完全不包含该板块)
         summary_block = ""
-        if dynamic_summary:
-            summary_block = (
-                "\n# 长期记忆 (Long-term Memory)\n"
-                "> [Memory Summary] 以下是基于历史对话的长期记忆摘要，仅供参考。\n"
-                f"{dynamic_summary}\n"
-            )
-        else:
-             summary_block = (
-                "\n# 长期记忆 (Long-term Memory)\n"
-                "> [Memory Summary] (New User / No Summary)\n"
-             )
+        if dynamic_summary is not None:
+            if dynamic_summary:
+                summary_block = (
+                    "\n# 长期记忆 (Long-term Memory)\n"
+                    "> [Memory Summary] 以下是基于历史对话的长期记忆摘要，仅供参考。\n"
+                    f"{dynamic_summary}\n"
+                )
+            else:
+                 summary_block = (
+                    "\n# 长期记忆 (Long-term Memory)\n"
+                    "> [Memory Summary] (New User / No Summary)\n"
+                 )
 
         # 3. Soul
         raw_soul = soul_prompt if soul_prompt else cls.SOUL_TEMPLATE_DEFAULT
