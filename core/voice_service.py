@@ -98,7 +98,8 @@ class VoiceService:
             response = await client.chat.completions.create(
                 model=asr_model,
                 messages=messages,
-                temperature=0.0  # ASR 任务使用低温度
+                temperature=0.0,  # ASR 任务使用低温度
+                modalities=["text"]
             )
             
             if not response.choices or not response.choices[0].message.content:
