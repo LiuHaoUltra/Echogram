@@ -376,35 +376,35 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     return
                     
                 else:
-                    # TTS 未配置，降级为文字回复并提示
+                    # TTS 未配置，降级为文字回复
                     logger.warning("TTS not configured, fallback to text reply")
-                    await context.bot.send_message(
+                    await sender_service.send_llm_reply(
                         chat_id=chat_id,
-                        text="⚠️ 语音回复功能未配置，请管理员使用 /dashboard 配置\n\n" + reply_content
-                    )
-                    await history_service.add_message(
-                        chat_id=chat_id,
-                        role="assistant",
-                        content=reply_content
+                        reply_content=reply_content,
+                        context=context,
+                        history_msgs=history_msgs
                     )
                     return
                     
             except TTSNotConfiguredError as e:
                 logger.warning(f"TTS not configured: {e}")
-                await context.bot.send_message(
+                await sender_service.send_llm_reply(
                     chat_id=chat_id,
-                    text="⚠️ 语音回复功能未配置\n\n" + reply_content
-                )
-                await history_service.add_message(
-                    chat_id=chat_id,
-                    role="assistant",
-                    content=reply_content
+                    reply_content=reply_content,
+                    context=context,
+                    history_msgs=history_msgs
                 )
                 return
             except Exception as e:
                 logger.error(f"TTS failed: {e}, fallback to text")
                 # TTS 失败，降级为文字回复
-                pass
+                await sender_service.send_llm_reply(
+                    chat_id=chat_id,
+                    reply_content=reply_content,
+                    context=context,
+                    history_msgs=history_msgs
+                )
+                return
         
         # 默认文字回复
         await sender_service.send_llm_reply(

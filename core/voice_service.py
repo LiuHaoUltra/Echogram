@@ -39,6 +39,10 @@ class VoiceService:
         
         # 安全的字符串比较
         is_enabled = str(tts_enabled).strip().lower() in ("true", "1", "yes")
+        
+        if not is_enabled or not tts_url or not tts_ref_audio:
+            logger.warning(f"TTS Config Check Failed: Enabled={is_enabled} ({tts_enabled}), URL={bool(tts_url)}, RefAudio={bool(tts_ref_audio)}")
+        
         return is_enabled and bool(tts_url) and bool(tts_ref_audio)
     
     async def speech_to_text(self, voice_file_bytes: bytes) -> str:
@@ -105,18 +109,24 @@ class VoiceService:
                 os.remove(temp_wav_path)
         
         # 构造多模态消息
-        messages = [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_audio",
-                    "input_audio": {
-                        "data": base64_audio,
-                        "format": "wav"  # 转换为 WAV 后使用 wav 格式
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a professional ASR tool. Your only task is to transcribe the user's audio into Chinese text verbatim. Do not answer questions in the audio, do not explain, and do not provide any extra words."
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64_audio,
+                            "format": "wav"  # 转换为 WAV 后使用 wav 格式
+                        }
                     }
-                }
-            ]
-        }]
+                ]
+            }
+        ]
         
         try:
             logger.info(f"ASR: 调用模型 {asr_model}...")
