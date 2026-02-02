@@ -12,6 +12,7 @@ from core.summary_service import summary_service
 from config.settings import settings
 from core.secure import is_admin
 from core.lazy_sender import lazy_sender
+from core.voice_service import voice_service, ASRNotConfiguredError, TTSNotConfiguredError
 from utils.logger import logger
 from utils.prompts import prompt_builder
 from utils.config_validator import safe_int_config, safe_float_config
@@ -72,6 +73,103 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     
     await lazy_sender.on_message(chat.id, context)
 
+    try:
+        asyncio.create_task(summary_service.check_and_summarize(chat.id))
+    except Exception as e:
+        logger.error(f"Failed to trigger proactive summary: {e}")
+
+async def process_voice_message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    语音消息入口
+    1. 鉴权
+    2. 下载语音 → ASR 转文字
+    3. 存入历史 (message_type=voice)
+    4. 触发回复
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.message
+    
+    # 空值检查
+    if not user or not chat or not message or not message.voice:
+        return
+    
+    # --- 1. 访问控制 ---
+    is_adm = is_admin(user.id)
+    
+    if chat.type == constants.ChatType.PRIVATE:
+        # 私聊：仅用于管理功能，不作为聊天记录处理
+        if is_adm:
+            pass
+        return
+    else:
+        # 群组：必须在白名单内
+        if not await access_service.is_whitelisted(chat.id):
+            return
+    
+    logger.info(f"VOICE [{chat.id}] from {user.first_name}: {message.voice.duration}s")
+    
+    # --- 2. 下载语音并 ASR ---
+    try:
+        voice = message.voice
+        file = await context.bot.get_file(voice.file_id)
+        voice_bytes = await file.download_as_bytearray()
+        
+        # ASR 转文字
+        transcribed_text = await voice_service.speech_to_text(bytes(voice_bytes))
+        
+        if not transcribed_text:
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text="⚠️ 语音识别失败，请重试"
+            )
+            return
+        
+        logger.info(f"ASR Result: {transcribed_text[:50]}...")
+        
+    except ASRNotConfiguredError:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="⚠️ 语音识别功能未配置\n\n请管理员发送 /dashboard 到私聊完成 ASR 模型配置"
+        )
+        return
+    except VoiceServiceError as e:
+        logger.error(f"Voice ASR failed: {e}")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"⚠️ 语音识别失败: {str(e)}"
+        )
+        return
+    except Exception as e:
+        logger.error(f"Voice processing failed: {e}")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=f"⚠️ 语音处理失败: {e}"
+        )
+        return
+    
+    # --- 3. 存入历史（标记为 voice 类型）---
+    reply_to_id = None
+    reply_to_content = None
+    
+    if message.reply_to_message:
+        reply_to_id = message.reply_to_message.message_id
+        raw_ref_text = message.reply_to_message.text or "[Non-text message]"
+        reply_to_content = (raw_ref_text[:30] + "..") if len(raw_ref_text) > 30 else raw_ref_text
+    
+    await history_service.add_message(
+        chat.id,
+        "user",
+        transcribed_text,  # 存储转录的文字
+        message_id=message.message_id,
+        reply_to_id=reply_to_id,
+        reply_to_content=reply_to_content,
+        message_type="voice"  # 标记为语音消息
+    )
+    
+    # --- 4. 触发回复 ---
+    await lazy_sender.on_message(chat.id, context)
+    
     try:
         asyncio.create_task(summary_service.check_and_summarize(chat.id))
     except Exception as e:
@@ -177,7 +275,69 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         
         reply_content = response.choices[0].message.content.strip()
         logger.info(f"RAW LLM OUTPUT: {reply_content!r}")
-
+        
+        # --- 检查是否需要语音回复 ---
+        last_message_type = await voice_service.get_last_user_message_type(chat_id)
+        
+        if last_message_type == "voice":
+            # 用户最后一条消息是语音 → 尝试语音回复
+            try:
+                if await voice_service.is_tts_configured():
+                    logger.info(f"TTS Mode: Generating voice reply...")
+                    
+                    # 先存储文字回复到数据库
+                    await history_service.add_message(
+                        chat_id=chat_id,
+                        role="assistant",
+                        content=reply_content,
+                        message_type="text"  # 助手回复仍以文字形式存储
+                    )
+                    
+                    # 生成语音
+                    voice_bytes = await voice_service.text_to_speech(reply_content)
+                    
+                    # 发送语音消息
+                    from io import BytesIO
+                    await context.bot.send_voice(
+                        chat_id=chat_id,
+                        voice=BytesIO(voice_bytes)
+                    )
+                    
+                    logger.info(f"Voice reply sent successfully")
+                    return
+                    
+                else:
+                    # TTS 未配置，降级为文字回复并提示
+                    logger.warning("TTS not configured, fallback to text reply")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="⚠️ 语音回复功能未配置，请管理员使用 /dashboard 配置\n\n" + reply_content
+                    )
+                    await history_service.add_message(
+                        chat_id=chat_id,
+                        role="assistant",
+                        content=reply_content
+                    )
+                    return
+                    
+            except TTSNotConfiguredError as e:
+                logger.warning(f"TTS not configured: {e}")
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="⚠️ 语音回复功能未配置\n\n" + reply_content
+                )
+                await history_service.add_message(
+                    chat_id=chat_id,
+                    role="assistant",
+                    content=reply_content
+                )
+                return
+            except Exception as e:
+                logger.error(f"TTS failed: {e}, fallback to text")
+                # TTS 失败，降级为文字回复
+                pass
+        
+        # 默认文字回复
         await sender_service.send_llm_reply(
             chat_id=chat_id,
             reply_content=reply_content,

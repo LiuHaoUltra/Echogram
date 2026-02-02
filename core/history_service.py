@@ -29,7 +29,7 @@ class HistoryService:
             await session.execute(delete(History))
             await session.commit()
 
-    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None):
+    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None, message_type: str = "text"):
         """添加一条消息记录"""
         async for session in get_db_session():
             msg = History(
@@ -38,7 +38,8 @@ class HistoryService:
                 content=content, 
                 message_id=message_id,
                 reply_to_id=reply_to_id, 
-                reply_to_content=reply_to_content
+                reply_to_content=reply_to_content,
+                message_type=message_type
             )
             session.add(msg)
             await session.commit()

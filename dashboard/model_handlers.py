@@ -55,7 +55,12 @@ async def show_model_selection_panel(update: Update, context: ContextTypes.DEFAU
             return
             
     # 2. 展示键盘
-    target_display = "Main" if target == "main" else "Summary"
+    if target == 'summary':
+        target_display = "Summary"
+    elif target == 'asr':
+        target_display = "ASR"
+    else:
+        target_display = "Main"
     
     # 使用自定义标题
     if header_text:
@@ -90,7 +95,13 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # 读取目标
     target = context.user_data.get('model_selection_target', 'main')
-    target_display = "Main" if target == "main" else "Summary"
+    
+    if target == 'summary':
+        target_display = "Summary"
+    elif target == 'asr':
+        target_display = "ASR"
+    else:
+        target_display = "Main"
     
     # 检查缓存
     if user_id not in _model_cache and data != "model_idx_back":
@@ -174,6 +185,9 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if target == 'summary':
             await config_service.set_value("summary_model_name", model_name)
             msg_text = f"✅ [Summary] 模型已切换为: <code>{model_name}</code>"
+        elif target == 'asr':
+            await config_service.set_value("asr_model_name", model_name)
+            msg_text = f"✅ [ASR] 模型已切换为: <code>{model_name}</code>"
         else:
             await config_service.set_value("model_name", model_name)
             msg_text = f"✅ [Main] 模型已切换为: <code>{model_name}</code>"

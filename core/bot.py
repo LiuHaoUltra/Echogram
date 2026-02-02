@@ -78,9 +78,10 @@ def run_bot():
     
     # 聊天引擎处理器 (低优先级)
     from telegram.ext import MessageHandler, filters
-    from core.chat_engine import process_message_entry
+    from core.chat_engine import process_message_entry, process_voice_message_entry
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
+    application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
     
     # 回应处理器
     from telegram.ext import MessageReactionHandler

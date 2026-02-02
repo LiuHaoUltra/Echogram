@@ -15,6 +15,7 @@ class History(Base):
     reply_to_id: Mapped[int] = mapped_column(BigInteger, nullable=True)  # 被回复的消息 ID
     reply_to_content: Mapped[str] = mapped_column(Text, nullable=True)  # 被回复消息内容摘要
     role: Mapped[str] = mapped_column(String(20))  # 角色: user/assistant/system
+    message_type: Mapped[str] = mapped_column(String(10), default="text")  # 消息类型: text/voice
     content: Mapped[str] = mapped_column(Text)  # 消息内容
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
