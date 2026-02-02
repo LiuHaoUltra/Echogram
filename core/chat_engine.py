@@ -423,7 +423,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # 先存储助手历史 (One Entry, Full Context)
         # 保持数据库整洁，存储完整的 XML 回复
         await history_service.add_message(
-            chat_id=chat.id,
+            chat_id=chat_id,
             role="assistant",
             content=reply_content,
             message_type="text"

@@ -6,6 +6,7 @@ from openai import AsyncOpenAI
 
 from core.config_service import config_service
 from utils.logger import logger
+from utils.prompts import prompt_builder
 from utils.config_validator import safe_float_config
 
 
