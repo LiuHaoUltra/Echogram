@@ -103,6 +103,10 @@ class HistoryService:
             history = result.scalars().all()
             return list(reversed(history))
 
+    async def get_recent_messages(self, chat_id: int, limit: int = 20):
+        """获取最近消息 (Alias for context retrieval)"""
+        return await self.get_recent_context(chat_id, limit)
+
     async def get_last_message_time(self, chat_id: int):
         """获取最近一条消息的时间"""
         async for session in get_db_session():
