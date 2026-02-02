@@ -11,6 +11,9 @@ def get_main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🧹 记忆管理", callback_data="menu_memory")
         ],
         [
+            InlineKeyboardButton("🎤 语音配置 (Voice)", callback_data="menu_voice")
+        ],
+        [
             InlineKeyboardButton("📺 主动消息 (Active Push)", callback_data="menu_agentic")
         ],
         [
@@ -64,6 +67,19 @@ def get_memory_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("🔢 设置记忆长度 (T)", callback_data="set_history_tokens")],
         [InlineKeyboardButton("🚨 恢复出厂设置 (Danger)", callback_data="factory_reset_request")],
+        [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_voice_keyboard() -> InlineKeyboardMarkup:
+    """语音配置菜单"""
+    keyboard = [
+        [InlineKeyboardButton("🎙️ 配置 ASR 模型", callback_data="set_asr_model")],
+        [InlineKeyboardButton("🔊 配置 TTS (URL)", callback_data="set_tts_url")],
+        [InlineKeyboardButton("🎵 配置参考音频", callback_data="set_tts_ref_audio")],
+        [InlineKeyboardButton("🌐 设置 TTS 语言", callback_data="set_tts_lang")],
+        [InlineKeyboardButton("⚡ 设置语速倍率", callback_data="set_tts_speed")],
+        [InlineKeyboardButton("✅ 启用/禁用 TTS", callback_data="toggle_tts")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
     ]
     return InlineKeyboardMarkup(keyboard)

@@ -4,6 +4,7 @@ from dashboard.callbacks import menu_navigation_callback
 from dashboard import input_handlers
 from dashboard import wizard_handlers
 from dashboard import model_handlers
+from dashboard import voice_input_handlers
 from dashboard.states import *
 
 def get_dashboard_handlers():
@@ -13,7 +14,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配入口按钮
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_asr_model|set_tts_url|set_tts_ref_audio|set_tts_lang|set_tts_speed)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -46,7 +47,16 @@ def get_dashboard_handlers():
             # Agentic Soul
             WAITING_INPUT_SUB_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_subscription)],
             WAITING_INPUT_ACTIVE_HOURS: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_active_hours)],
-            WAITING_INPUT_IDLE_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_idle_threshold)]
+            WAITING_INPUT_IDLE_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_idle_threshold)],
+            # 语音配置
+            WAITING_INPUT_ASR_MODEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_model_name),
+                CallbackQueryHandler(model_handlers.handle_model_callback)
+            ],
+            WAITING_INPUT_TTS_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_url_input)],
+            WAITING_INPUT_TTS_REF_AUDIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_ref_audio_input)],
+            WAITING_INPUT_TTS_LANG: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_lang_input)],
+            WAITING_INPUT_TTS_SPEED: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_speed_input)]
         },
         fallbacks=[
             CommandHandler("dashboard", dashboard_command),

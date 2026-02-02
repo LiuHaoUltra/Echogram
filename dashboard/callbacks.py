@@ -11,6 +11,7 @@ from dashboard.keyboards import (
     get_persona_keyboard,
     get_access_control_keyboard,
     get_memory_keyboard,
+    get_voice_keyboard,
     get_cancel_keyboard
 )
 from dashboard.states import (
@@ -199,7 +200,75 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         )
         return ConversationHandler.END
 
-    # --- 5. 新闻推送 (News Push) 管理 ---
+    # --- 5. 语音配置 (Voice) ---
+    if data == "menu_voice":
+        await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=get_voice_keyboard(), parse_mode="HTML")
+        return ConversationHandler.END
+    
+    if data == "set_asr_model":
+        # 使用模型选择面板
+        await show_model_selection_panel(update, context, target="asr", header_text="🎙️ <b>ASR 模型选择</b>\n\n选择用于语音识别的模型：")
+        from dashboard.states import WAITING_INPUT_ASR_MODEL
+        return WAITING_INPUT_ASR_MODEL
+    
+    if data == "set_tts_url":
+        current_val = await config_service.get_value("tts_api_url", "未配置")
+        await query.edit_message_text(
+            text=f"🔊 <b>设置 TTS API URL</b>\n\n当前: <code>{current_val}</code>\n\n请输入 GPT-SoVITS API 地址\n示例: <code>https://tts.celia.sh</code>",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_TTS_URL
+        return WAITING_INPUT_TTS_URL
+    
+    if data == "set_tts_ref_audio":
+        current_val = await config_service.get_value("tts_ref_audio_path", "未配置")
+        await query.edit_message_text(
+            text=f"🎵 <b>设置参考音频路径</b>\n\n当前: <code>{current_val}</code>\n\n此路径为 GPT-SoVITS 服务器上的音频文件路径（用于语音克隆）\n示例: <code>/app/reference/voice.wav</code>",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_TTS_REF_AUDIO
+        return WAITING_INPUT_TTS_REF_AUDIO
+    
+    if data == "set_tts_lang":
+        current_val = await config_service.get_value("tts_text_lang", "zh")
+        await query.edit_message_text(
+            text=f"🌐 <b>设置 TTS 语言</b>\n\n当前: <code>{current_val}</code>\n\n请输入语言代码\n• <code>zh</code> = 中文\n• <code>en</code> = 英文",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_TTS_LANG
+        return WAITING_INPUT_TTS_LANG
+    
+    if data == "set_tts_speed":
+        current_val = await config_service.get_value("tts_speed_factor", "1.0")
+        await query.edit_message_text(
+            text=f"⚡ <b>设置语速倍率</b>\n\n当前: <code>{current_val}</code>\n\n请输入 0.5 - 2.0 之间的数字\n• <code>0.5</code> = 半速\n• <code>1.0</code> = 正常速度\n• <code>2.0</code> = 双倍速",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_TTS_SPEED
+        return WAITING_INPUT_TTS_SPEED
+    
+    if data == "toggle_tts":
+        current_val = await config_service.get_value("tts_enabled", "false")
+        is_enabled = str(current_val).strip().lower() in ("true", "1", "yes")
+        new_val = "false" if is_enabled else "true"
+        await config_service.set_value("tts_enabled", new_val)
+        
+        status = "已启用 ✅" if new_val == "true" else "已禁用 ❌"
+        await query.answer(f"TTS 功能 {status}")
+        
+        # 刷新菜单
+        await query.edit_message_text(text="<b>🎤 语音配置</b>", reply_markup=get_voice_keyboard(), parse_mode="HTML")
+        return ConversationHandler.END
+
+    # --- 6. 新闻推送 (News Push) 管理 ---
     if data == "menu_agentic":
         from dashboard.keyboards import get_agentic_keyboard
         await query.edit_message_text(text="<b>📺 主动消息 (Active Push)</b>", reply_markup=get_agentic_keyboard(), parse_mode="HTML")
