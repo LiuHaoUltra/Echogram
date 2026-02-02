@@ -220,7 +220,7 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await context.bot.send_message(user.id, content_dynamic, parse_mode='HTML')
         
-        await update.message.reply_text("✅ 提示词预览已分段发送：[1] 静态协议, [2] 动态记忆。")
+        await update.message.reply_text("✅ 提示词预览已分段发送。")
     except Exception as e:
         logger.error(f"Failed to send prompt preview: {e}")
         await update.message.reply_text("❌ 无法发送私聊消息，请确保您已私聊过机器人。")
