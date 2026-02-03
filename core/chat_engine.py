@@ -10,6 +10,9 @@ from core.history_service import history_service
 from core.config_service import config_service
 from core.summary_service import summary_service
 from config.settings import settings
+from config.database import get_db_session
+from models.history import History
+from sqlalchemy import select, delete
 from core.secure import is_admin
 from core.lazy_sender import lazy_sender
 from core.media_service import media_service, TTSNotConfiguredError, MediaServiceError
@@ -455,10 +458,6 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # --- 污染清理逻辑 ---
         # 如果处理失败，删除当前批次中处于 "Processing..." 状态的占位消息，防止污染上下文
         try:
-            from sqlalchemy import delete
-            from models.history import History
-            from config.database import get_db_session
-            
             async for session in get_db_session():
                 # 寻找当前批次中所有带 Processing 标识的消息 ID
                 pending_ids = [m.id for m in tail_msgs if "[Image: Processing...]" in m.content or "[Voice: Processing...]" in m.content]
@@ -471,7 +470,6 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
         # 强制通知管理员 (私聊推送)
         try:
-            from config.settings import settings
             error_msg = (
                 f"🚨 <b>API Call Failed</b>\n\n"
                 f"会话 ID: <code>{chat_id}</code>\n"
