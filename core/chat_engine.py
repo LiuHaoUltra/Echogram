@@ -126,11 +126,13 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
         history_context = []
         for h in history_objs:
             # 必须包含 message_id，否则 SenderService 无法进行表情回应
+            # 现在也包含 timestamp 以便 voice_service 格式化前缀
             history_context.append({
                 "role": h.role, 
                 "content": h.content, 
                 "message_id": h.message_id,
-                "chat_id": h.chat_id
+                "chat_id": h.chat_id,
+                "timestamp": h.timestamp
             })
             
         # 调用 Voice Service (多模态对话)
@@ -191,7 +193,8 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
             "role": "user",
             "content": transcript,
             "message_id": message.message_id,
-            "chat_id": chat.id
+            "chat_id": chat.id,
+            "timestamp": message.date # Telegram 消息自带 datetime 对象
         })
         
         # 4.2 助手回复
@@ -279,16 +282,19 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 time_str = "Time Error"
         else:
             time_str = "Unknown Time"
-            
+        
+        # 统一 ID 标识符
+        msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
+        prefix = f"[{msg_id_str}] [{time_str}] "
+
         if h.role == 'user':
-            prefix = f"[MSG {h.message_id}] [{time_str}] " if h.message_id else f"[MSG ?] [{time_str}] "
             if h.reply_to_content:
                 prefix += f'(Reply to "{h.reply_to_content}") '
             messages.append({"role": "user", "content": prefix + h.content})
         elif h.role == 'system':
-            messages.append({"role": "system", "content": f"[{time_str}] {h.content}"})
+            messages.append({"role": "system", "content": prefix + h.content})
         else:
-            messages.append({"role": "assistant", "content": h.content})
+            messages.append({"role": "assistant", "content": prefix + h.content})
         
     # 安全转换 temperature，范围 0.0-2.0
     current_temp = safe_float_config(

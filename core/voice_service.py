@@ -121,9 +121,40 @@ class VoiceService:
         messages = []
         messages.append({"role": "system", "content": final_system_prompt})
         
-        # 插入历史记录 (仅最近几条，避免 Token 过长)
+        # 插入历史记录 (仅最近几条，并进行格式化处理)
         if history_messages:
-            messages.extend(history_messages[-10:])
+            import pytz
+            try:
+                tz = pytz.timezone(timezone)
+            except:
+                tz = pytz.UTC
+
+            formatted_history = []
+            for h_obj in history_messages[-10:]:
+                # 假设 h_obj 是从 history_service.get_recent_messages 传来的字典
+                # 包含: role, content, message_id, timestamp (可能由于 DB 查询没带，需确认)
+                # 查阅 chat_engine.py 的 process_voice_message_entry，传进来的是带 message_id 的字典
+                
+                # 获取时间字符串 (如果字典里没有 timestamp，显示 Unknown)
+                ts = h_obj.get('timestamp')
+                if ts:
+                    try:
+                        if ts.tzinfo is None: ts = ts.replace(tzinfo=pytz.UTC)
+                        time_str = ts.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        time_str = "Time Error"
+                else:
+                    time_str = "Unknown Time"
+                
+                msg_id = h_obj.get('message_id')
+                msg_id_str = f"MSG {msg_id}" if msg_id else "MSG ?"
+                prefix = f"[{msg_id_str}] [{time_str}] "
+                
+                formatted_history.append({
+                    "role": h_obj["role"],
+                    "content": prefix + h_obj["content"]
+                })
+            messages.extend(formatted_history)
             
         # 3. 当前语音消息
         logger.info(f"Preparing Audio Payload: WAV Size={len(wav_bytes)} bytes, Base64 Len={len(base64_audio)}")
