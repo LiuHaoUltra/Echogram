@@ -85,13 +85,31 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active_tokens = curr_t
             win_start_id = m.id
             
+        # 获取时区
+        timezone = configs.get("timezone", "UTC")
+        import pytz
+        try:
+            tz = pytz.timezone(timezone)
+        except:
+            tz = pytz.UTC
+
         # 计算缓冲区 (位于 last_summarized_id 和 win_start_id 之间)
         buffer_text = ""
         # 注意：这里需要按时间正序拼接，且包含完整前缀以模拟真实总结负载
         for m in reversed(all_msgs):
             if last_summarized_id < m.id < win_start_id:
+                # 必须使用与 summary_service 相同的真实时间戳格式
+                m_time_str = "Unknown"
+                if m.timestamp:
+                    try:
+                        dt = m.timestamp.replace(tzinfo=pytz.UTC) if m.timestamp.tzinfo is None else m.timestamp
+                        m_time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+                    except: pass
+                
+                m_id_str = f"MSG {m.message_id}" if m.message_id else "MSG ?"
                 m_type = m.message_type.capitalize() if m.message_type else "Text"
-                buffer_text += f"[MSG {m.message_id}] [Timestamp] [{m_type}] {m.role}: {m.content}\n"
+                # 格式: [MSG ID] [Timestamp] [Type] Role: Content
+                buffer_text += f"[{m_id_str}] [{m_time_str}] [{m_type}] {m.role}: {m.content}\n"
         buffer_tokens = history_service.count_tokens(buffer_text)
     
     # 判断会话状态与进度条口径

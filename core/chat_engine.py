@@ -114,8 +114,12 @@ async def process_photo_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         raw_text = message.reply_to_message.text or "[Non-text message]"
         reply_to_content = (raw_text[:30] + "..") if len(raw_text) > 30 else raw_text
 
+    # 获取 Caption 
+    caption = message.caption or ""
+    db_content = f"[Image: Processing...]{caption}"
+
     await history_service.add_message(
-        chat.id, "user", "[Image: Processing...]", 
+        chat.id, "user", db_content, 
         message_id=message.message_id,
         reply_to_id=reply_to_id, reply_to_content=reply_to_content,
         message_type="image", file_id=file_id
@@ -291,12 +295,20 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
 
             if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in msg.content:
+                # 提取 Caption 
+                caption_text = msg.content.replace("[Image: Processing...]", "").strip()
+                
                 try:
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
                     b64 = await media_service.process_image_to_base64(bytes(b))
                     if b64:
-                        multimodal_content.append({"type": "text", "text": f"{prefix}[Image]"})
+                        # 先发图文描述（如有）
+                        display_text = f"{prefix}[Image]"
+                        if caption_text:
+                            display_text += f" {caption_text}"
+                            
+                        multimodal_content.append({"type": "text", "text": display_text})
                         multimodal_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                         pending_images_map[msg.message_id] = msg
                 except Exception as e:

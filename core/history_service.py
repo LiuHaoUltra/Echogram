@@ -68,8 +68,9 @@ class HistoryService:
 
             # 贪婪填充
             for msg in candidates:
-                # 估算开销
-                cost = self.count_tokens(msg.content) + 4
+                # 估算包含前缀的消息长度 (需包含 [ID] [Time] [Type] 以对齐最新格式)
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {msg.content}\n"
+                cost = self.count_tokens(msg_text)
                 
                 if current_tokens + cost > target_tokens:
                     break # 满了，停止
@@ -92,7 +93,9 @@ class HistoryService:
 
             current_tokens = 0
             for msg in candidates:
-                cost = self.count_tokens(msg.content) + 4
+                # 同步估算模型
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {msg.content}\n"
+                cost = self.count_tokens(msg_text)
                 if current_tokens + cost > target_tokens:
                     break
                 current_tokens += cost
