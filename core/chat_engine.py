@@ -452,6 +452,23 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"API Call failed: {e}")
+        # --- 污染清理逻辑 ---
+        # 如果处理失败，删除当前批次中处于 "Processing..." 状态的占位消息，防止污染上下文
+        try:
+            from sqlalchemy import delete
+            from models.history import History
+            from config.database import get_db_session
+            
+            async for session in get_db_session():
+                # 寻找当前批次中所有带 Processing 标识的消息 ID
+                pending_ids = [m.id for m in tail_msgs if "[Image: Processing...]" in m.content or "[Voice: Processing...]" in m.content]
+                if pending_ids:
+                    await session.execute(delete(History).where(History.id.in_(pending_ids)))
+                    await session.commit()
+                    logger.info(f"Context Cleanup: Removed {len(pending_ids)} pending placeholder(s) due to API failure.")
+        except Exception as cleanup_err:
+            logger.error(f"Failed to cleanup pending placeholders: {cleanup_err}")
+
         if is_admin(chat_id):
             await context.bot.send_message(chat_id, f"❌ API Error: {e}")
 
