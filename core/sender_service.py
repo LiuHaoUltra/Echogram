@@ -88,6 +88,7 @@ class SenderService:
         cleaned_reply_content = "\n".join(cleaned_history_parts)
 
         # 2. 依次发送块
+        last_sent_msg_id = None
         for i, block in enumerate(reply_blocks):
             content = block["content"]
             target_reply_id = block["reply"]
@@ -121,15 +122,17 @@ class SenderService:
                     await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
                     
                     import time
-                    await context.bot.send_voice(
+                    sent_msg = await context.bot.send_voice(
                         chat_id=chat_id,
                         voice=voice_bytes,
                         filename=f"voice_{int(time.time())}_{i}.ogg",
                         reply_to_message_id=target_reply_id
                     )
+                    last_sent_msg_id = sent_msg.message_id
                 except Exception as e:
                     logger.error(f"SenderService: TTS Failed, falling back to text: {e}")
-                    await context.bot.send_message(chat_id=chat_id, text=clean_text, reply_to_message_id=target_reply_id)
+                    sent_msg = await context.bot.send_message(chat_id=chat_id, text=clean_text, reply_to_message_id=target_reply_id)
+                    last_sent_msg_id = sent_msg.message_id
             else:
                 # --- 文字模式发送 ---
                 typing_duration = min(len(content) * 0.15, 3.0)
@@ -137,20 +140,25 @@ class SenderService:
                 await asyncio.sleep(typing_duration)
 
                 try:
-                    await context.bot.send_message(
+                    sent_msg = await context.bot.send_message(
                         chat_id=chat_id, 
                         text=content, 
                         reply_to_message_id=target_reply_id
                     )
+                    last_sent_msg_id = sent_msg.message_id
                 except Exception as e:
                     logger.warning(f"SenderService: Failed to send part {i} to {chat_id}: {e}")
                     if target_reply_id: # 降级不带引用重试
                         try:
-                            await context.bot.send_message(chat_id=chat_id, text=content)
+                            sent_msg = await context.bot.send_message(chat_id=chat_id, text=content)
+                            last_sent_msg_id = sent_msg.message_id
                         except: pass
         
         # 3. 记录历史
-        await history_service.add_message(chat_id, "assistant", cleaned_reply_content)
+        await history_service.add_message(
+            chat_id, "assistant", cleaned_reply_content, 
+            message_id=last_sent_msg_id
+        )
         
         # 4. 触发总结检查
         try:
