@@ -72,11 +72,13 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not all_msgs:
             break
 
-        # 识别活跃窗口起始 ID
+        # 识别活跃窗口起始 ID (从最新消息向后数)
         curr_t = 0
         win_start_id = all_msgs[0].id
         for m in all_msgs:
-            t = history_service.count_tokens(f"{m.role}: {m.content}\n")
+            # 必须使用与 summary_service 相同的估算模板 (含 Type 和 Role)
+            msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{m.message_type or 'Text'}] {m.role}: {m.content}\n"
+            t = history_service.count_tokens(msg_text)
             if curr_t + t > T and curr_t > 0:
                 break
             curr_t += t
@@ -85,9 +87,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         # 计算缓冲区 (位于 last_summarized_id 和 win_start_id 之间)
         buffer_text = ""
-        for m in all_msgs:
+        # 注意：这里需要按时间正序拼接，且包含完整前缀以模拟真实总结负载
+        for m in reversed(all_msgs):
             if last_summarized_id < m.id < win_start_id:
-                buffer_text += f"{m.role}: {m.content}\n"
+                m_type = m.message_type.capitalize() if m.message_type else "Text"
+                buffer_text += f"[MSG {m.message_id}] [Timestamp] [{m_type}] {m.role}: {m.content}\n"
         buffer_tokens = history_service.count_tokens(buffer_text)
     
     # 判断会话状态与进度条口径
@@ -131,8 +135,6 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
 
-    if not is_admin(user.id):
-        return
     if chat.type == constants.ChatType.PRIVATE:
         await update.message.reply_text("💡 请在群组中使用此指令，以预览针对该群组生成的提示词。")
         return
@@ -248,8 +250,8 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text("✅ 提示词预览已分段发送。")
     except Exception as e:
-        logger.error(f"Failed to send prompt preview: {e}")
-        await update.message.reply_text("❌ 无法发送私聊消息，请确保您已私聊过机器人。")
+        logger.error(f"Failed to send prompt preview: {e}", exc_info=True)
+        await update.message.reply_text(f"❌ 预览发送失败。请检查机器人是否已在私聊中启动。")
 
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """

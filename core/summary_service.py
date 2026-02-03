@@ -113,8 +113,8 @@ class SummaryService:
             
             # 这里的顺序是 desc
             for msg in all_msgs:
-                # 估算包含前缀的消息长度
-                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] {msg.role}: {msg.content}\n"
+                # 估算包含前缀的消息长度 (需包含 [Type] 和 Role 以对齐最新格式)
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {msg.content}\n"
                 t = history_service.count_tokens(msg_text)
                 if curr_tokens + t > T and curr_tokens > 0:
                     break
