@@ -70,11 +70,13 @@ class PromptBuilder:
 """
 
     @classmethod
-    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = None, has_voice: bool = False, has_image: bool = False) -> str:
+    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = None, 
+                            has_voice: bool = False, has_image: bool = False, reaction_violation: bool = False) -> str:
         """
         组装完整的 System Prompt
         :param has_voice: 是否包含语音输入 (会触发 Cohesive 模式)
         :param has_image: 是否包含图片输入
+        :param reaction_violation: 上一轮是否触发了非白名单表情回应 (用于注入警告)
         """
         import pytz
         try:
@@ -122,8 +124,13 @@ class PromptBuilder:
         else:
             mode_indicator = "\n\n# 当前任务模式：文字聊天 (Text Chat)\n> [IMPORTANT] 模式要求：推荐 1-5 个短语气泡。模仿 IM 连发频率。"
 
+        # 7. 违规警告 (针对上一轮的错误行为进行即时反馈)
+        warning_block = ""
+        if reaction_violation:
+            warning_block = "\n\n# ⚠️ 行为纠偏 (Behavioral Correction)\n> [WARNING] 你在上一轮使用了**非白名单**的表情回应。严禁使用除 👍, ❤️, 🔥, 🥰, 🤔, 🤣, 😡, 🫡, 👀, 🌚, 😭, 💩, 🤝 以外的任何回应。请遵守协议，不要滥用 react 属性。"
+
         # 最终组装
-        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{mode_indicator}"
+        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{mode_indicator}{warning_block}"
 
 
     @classmethod

@@ -234,13 +234,28 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     # 只要末尾存在语音或图片，就启用对应的多模态协议
     has_v = any(m.message_type == 'voice' for m in tail_msgs)
     has_i = any(m.message_type == 'image' for m in tail_msgs)
+
+    # 4. 检查上一轮表情违规情况 (Reaction Violation Check)
+    has_rv = False
+    if last_assistant_idx != -1:
+        last_assistant_msg = history_msgs[last_assistant_idx]
+        from core.sender_service import sender_service
+        # 解析标签中的 react 属性
+        react_matches = re.finditer(r'react=["\']([^"\']+)["\']', last_assistant_msg.content)
+        for rm in react_matches:
+            full_react = rm.group(1).strip()
+            emoji_part = full_react.split(":")[0].strip() if ":" in full_react else full_react
+            if emoji_part not in sender_service.TG_FREE_REACTIONS:
+                has_rv = True
+                break
     
     system_content = prompt_builder.build_system_prompt(
         soul_prompt=system_prompt_custom, 
         timezone=timezone, 
         dynamic_summary=dynamic_summary,
         has_voice=has_v,
-        has_image=has_i
+        has_image=has_i,
+        reaction_violation=has_rv
     )
     
     messages = [{"role": "system", "content": system_content}]
