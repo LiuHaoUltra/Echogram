@@ -74,12 +74,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buffer_percent = round((buffer_tokens / T) * 100, 1) if T > 0 else 0
     
     # 状态判定
-    if buffer_tokens > 0:
-        session_state = "🔄 Rolling (Archiving)"
-        state_desc = "旧记忆正在向缓冲区溢出，进入滚动上下文。"
-    else:
-        session_state = "🌱 Growing (Linear)"
-        state_desc = "记忆尚未填满上限，直接由 LLM 读取。"
+    session_state = "🔄 Rolling (Archiving)" if buffer_tokens > 0 else "🌱 Growing (Linear)"
 
     # 获取时区设定
     timezone_str = configs.get("timezone", "UTC")
@@ -101,8 +96,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         f"📊 <b>Session Statistics</b>\n\n"
         f"🆔 Chat ID: <code>{chat.id}</code>\n"
-        f"📈 <b>State</b>: <code>{session_state}</code>\n"
-        f"<i>{state_desc}</i>\n\n"
+        f"📈 <b>State</b>: <code>{session_state}</code>\n\n"
         f"🧠 <b>Context Usage</b>:\n"
         f"<code>{make_bar(active_tokens, T)} {active_percent}%</code>\n"
         f"({active_tokens} / {T} tokens)\n\n"
