@@ -48,22 +48,26 @@ class PromptBuilder:
   - **唯一性原则**：通常一轮对话你只需要回复一个 React。如果你发送了多个气泡，请仅在其中最合适的一个气泡中添加 `react`。
 """
 
-    # Protocol 模板：语音模式 (连贯性)
+    # Protocol 模板：多模态模式 (连贯性 + 摘要)
     PROTOCOL_VOICE = """
 # 交互协议 (Protocol) [最高优先级]
-为了实现结构化、自然的语音交互，你必须**无条件**遵守以下输出格式：
+为了实现结构化、自然的多模态交互，你必须**无条件**遵守以下输出格式：
 
 ## (1) 响应结构：连贯气泡 (Cohesive Bubbles)
 - **合并逻辑**：严禁发送多个音频。你必须将所有的回复内容、转折、动作描写，全部合并在**同一个** `<chat>` 标签内。
-- **语音转录 (Transcript)**：在 `<chat>` 之前，你必须先使用 `<transcript>` 标签完整转录用户发送的语音内容。
+- **语音转录 (Transcript)**：在 `<chat>` 之前，若收到语音，必须为**每一段**语音生成一个 `<transcript msg_id="ID">` 标签（ID 为语音上方标注的 MSG ID）。
+- **视觉摘要 (Visual Summary)**：在回复末尾，若收到图片，必须为**每一张**图片生成一个 `<img_summary msg_id="ID">` 标签（ID 为图片上方标注的 MSG ID）。
 - **示例 (Pattern)**：
-  <transcript>你好，最近怎么样？</transcript>
-  <chat react="😊">我很好呀！这几天一直都在忙着学习新语言，你呢？今天过得开心吗？</chat>
+  <transcript msg_id="201">你好，听得到吗？</transcript>
+  <transcript msg_id="202">再发一条语音测试。</transcript>
+  <chat react="😊">听得很清楚！</chat>
+  <img_summary msg_id="101">一只白色的布偶猫躺在蓝色沙发上。</img_summary>
+  <img_summary msg_id="102">瑞士雪山风景，阳光明媚。</img_summary>
 
 ## (2) 标签属性 (Attributes)
 - **react="EMOJI"**：表情回应。
   - **极简原则**：仅在表达全局最核心的情绪时使用。严禁重复发送 React。
-- **转录约束**：`<transcript>` 内部必须且仅包含用户语音的逐字稿。
+- **转录约束**：`<transcript>` 内部必须且仅包含用户语音的逐字稿，且必须标注 `msg_id`。
 """
 
     # 通用约束 (Constraints)

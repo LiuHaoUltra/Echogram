@@ -148,10 +148,15 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1.1 检测最后的交互模式
     try:
         last_msg_type = await voice_service.get_last_user_message_type(chat.id)
-        mode = "voice" if last_msg_type == "voice" else "text"
+        # 简单映射：根据最后一条消息类型来预览 Protocol
+        # 注意：这只是为了预览 System Prompt，真实聊天中是根据当次 Payload 动态生成的
+        simulated_has_voice = (last_msg_type == "voice")
+        simulated_has_image = (last_msg_type == "image")
     except Exception as e:
-        logger.warning(f"Failed to detect last message type for {chat.id}, fallback to 'text': {e}")
-        mode = "text"
+        logger.warning(f"Failed to detect last message type for {chat.id}: {e}")
+        simulated_has_voice = False
+        simulated_has_image = False
+        last_msg_type = "text (fallback)"
 
     dynamic_summary_raw = await summary_service.get_summary(chat.id)
     configs = await config_service.get_all_settings()
@@ -163,7 +168,8 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         soul_prompt=soul_prompt, 
         timezone=timezone, 
         dynamic_summary=None,
-        mode=mode
+        has_voice=simulated_has_voice,
+        has_image=simulated_has_image
     )
 
     # 2.1 获取动态记忆部分 (摘要 + 历史上下文)
@@ -197,7 +203,7 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━\n"
         f"<b>Chat ID:</b> <code>{chat.id}</code>\n"
         f"<b>Chat Name:</b> {chat.title}\n"
-        f"<b>Detected Mode:</b> <code>{mode.upper()}</code>\n"
+        f"<b>Last Msg Type:</b> <code>{str(last_msg_type).upper()}</code>\n"
         f"<b>Generated At:</b> {now_str}\n"
         f"━━━━━━━━━━━━━━━\n\n"
     )

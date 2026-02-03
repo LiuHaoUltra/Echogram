@@ -40,7 +40,7 @@
 
 ```text
 dashboard - 打开控制面板（全局）
-prompt - 预览下轮提示词（仅群组）
+prompt - 预览上轮系统提示词、当前上下文与摘要（仅群组）
 stats - 查看记忆状态（仅群组）
 reset - 清空群组记忆（仅群组）
 add_whitelist - 加入白名单（仅群组）

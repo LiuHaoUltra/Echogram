@@ -36,6 +36,27 @@ async def post_init(application: Application):
             break # 用完即弃
     except Exception as e:
         logger.error(f"Schema check failed: {e}")
+
+    # --- Schema Patch (Fix for file_id missing) ---
+    try:
+        from config.database import get_db_session
+        from sqlalchemy import text
+        async for session in get_db_session():
+            try:
+                # 检查列是否存在 (SQLite)
+                await session.execute(text("SELECT file_id FROM history LIMIT 1"))
+            except Exception:
+                logger.warning("Column 'file_id' missing in 'history'. Applying patch...")
+                try:
+                    await session.execute(text("ALTER TABLE history ADD COLUMN file_id VARCHAR(255)"))
+                    await session.commit()
+                    logger.info("Schema patch applied: 'file_id' column added.")
+                except Exception as e:
+                    logger.error(f"Failed to apply schema patch (file_id): {e}")
+            break # 用完即弃
+    except Exception as e:
+        logger.error(f"Schema check (file_id) failed: {e}")
+    # ---------------------------------------------------
     # ---------------------------------------------------
     
     # 确认连接
@@ -100,10 +121,11 @@ def run_bot():
     
     # 聊天引擎处理器 (低优先级)
     from telegram.ext import MessageHandler, filters
-    from core.chat_engine import process_message_entry, process_voice_message_entry
+    from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
     application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
+    application.add_handler(MessageHandler(filters.PHOTO, process_photo_entry))  # 图片消息处理
     
     # 回应处理器
     from telegram.ext import MessageReactionHandler

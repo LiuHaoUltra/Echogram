@@ -22,10 +22,90 @@ class TTSNotConfiguredError(VoiceServiceError):
 
 
 class VoiceService:
-    """语音服务：ASR（语音转文字）和 TTS（文字转语音）"""
+    """语音与多模态服务：ASR、TTS 及 Vision"""
     
     # is_asr_configured 已移除 (统一使用主模型)
     
+    async def process_image_to_base64(self, file_bytes: bytes) -> str:
+        """
+        将图片字节流转换为 Base64 字符串 (自动压缩及格式化)
+        - Max Dimension: 2048px
+        - Format: JPEG
+        - Quality: 85
+        """
+        import io
+        from PIL import Image
+        
+        try:
+            image = Image.open(io.BytesIO(file_bytes))
+            
+            # 尺寸限制 (OpenAI 建议 < 20MB且在合理分辨率内，2048px 足够清晰且省 Token)
+            # 尺寸限制 (OpenRouter/OpenAI 最佳实践)
+            # 1. 限制最大边长 2048 (防止超限)
+            # 2. 限制最短边长 768 (Vision 模型原生分辨率，超过此分辨率会被 API 强制压缩)
+            w, h = image.size
+            
+            # 计算缩放比例
+            ratio = 1.0
+            if max(w, h) > 2048:
+                ratio = min(ratio, 2048 / max(w, h))
+            if min(w, h) * ratio > 768:
+                ratio = min(ratio, 768 / min(w, h))
+                
+            if ratio < 1.0:
+                new_size = (int(w * ratio), int(h * ratio))
+                image = image.resize(new_size, Image.Resampling.LANCZOS)
+            
+            # 统一转为 RGB (避免 RGBA 存 JPEG 报错)
+            if image.mode in ('RGBA', 'P'):
+                image = image.convert('RGB')
+                
+            buffer = io.BytesIO()
+            image.save(buffer, format="JPEG", quality=85)
+            return base64.b64encode(buffer.getvalue()).decode('utf-8')
+            
+        except Exception as e:
+            logger.error(f"Image processing failed: {e}")
+            # 兜底：如果处理失败，尝试原样发送(不推荐)或返回 None
+            return base64.b64encode(file_bytes).decode('utf-8')
+
+
+    async def process_audio_to_base64(self, file_bytes: bytes) -> str:
+        """
+        将 OGG 语音转换为 WAV Base64
+        """
+        import uuid
+        import os
+        from pydub import AudioSegment
+        
+        temp_ogg_path = f"/tmp/{uuid.uuid4()}.ogg"
+        temp_wav_path = f"/tmp/{uuid.uuid4()}.wav"
+        
+        try:
+            with open(temp_ogg_path, "wb") as f:
+                f.write(file_bytes)
+            
+            audio = AudioSegment.from_ogg(temp_ogg_path)
+            audio.export(temp_wav_path, format="wav")
+            
+            with open(temp_wav_path, "rb") as f:
+                wav_bytes = f.read()
+                return base64.b64encode(wav_bytes).decode('utf-8')
+                
+        except Exception as e:
+            logger.error(f"Audio conversion failed: {e}")
+            return None
+        finally:
+            try:
+                if os.path.exists(temp_ogg_path): os.remove(temp_ogg_path)
+                if os.path.exists(temp_wav_path): os.remove(temp_wav_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean temp files: {e}")
+
+
+    # build_multimodal_payload 已废弃，逻辑移至 chat_engine (Chronological Loop)
+
+
     async def is_tts_configured(self) -> bool:
         """检查 TTS 是否已配置"""
         tts_enabled = await config_service.get_value("tts_enabled", "false")

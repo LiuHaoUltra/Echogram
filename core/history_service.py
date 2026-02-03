@@ -1,5 +1,5 @@
 import tiktoken
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from config.database import get_db_session
 from models.history import History
 
@@ -29,7 +29,7 @@ class HistoryService:
             await session.execute(delete(History))
             await session.commit()
 
-    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None, message_type: str = "text"):
+    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None, message_type: str = "text", file_id: str = None):
         """添加一条消息记录"""
         async for session in get_db_session():
             msg = History(
@@ -39,9 +39,17 @@ class HistoryService:
                 message_id=message_id,
                 reply_to_id=reply_to_id, 
                 reply_to_content=reply_to_content,
-                message_type=message_type
+                message_type=message_type,
+                file_id=file_id
             )
             session.add(msg)
+            await session.commit()
+
+    async def update_message_content_by_file_id(self, file_id: str, new_content: str):
+        """根据 File ID 更新消息内容 (用于回填摘要)"""
+        async for session in get_db_session():
+            stmt = update(History).where(History.file_id == file_id).values(content=new_content)
+            await session.execute(stmt)
             await session.commit()
 
     async def get_token_controlled_context(self, chat_id: int, target_tokens: int):

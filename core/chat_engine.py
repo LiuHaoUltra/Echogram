@@ -18,9 +18,10 @@ from utils.prompts import prompt_builder
 from utils.config_validator import safe_int_config, safe_float_config
 from core.sender_service import sender_service
 
+
 async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    HTTP/Telegram 消息入口
+    HTTP/Telegram 消息入口 (文本)
     1. 鉴权
     2. 存入历史
     3. 放入缓冲队列 (LazySender)
@@ -78,13 +79,59 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.error(f"Failed to trigger proactive summary: {e}")
 
+
+async def process_photo_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    图片消息入口 (聚合模式)
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.message
+    
+    if not user or not chat or not message or not message.photo:
+        return
+        
+    # --- 1. 访问控制 ---
+    is_adm = is_admin(user.id)
+    if chat.type == constants.ChatType.PRIVATE:
+        if is_adm: pass
+        return
+    else:
+        if not await access_service.is_whitelisted(chat.id):
+            return
+            
+    logger.info(f"PHOTO [{chat.id}] from {user.first_name}")
+    
+    # 获取最大尺寸图片
+    photo = message.photo[-1]
+    file_id = photo.file_id
+    
+    # 存入历史 (占位)
+    reply_to_id = None
+    reply_to_content = None
+    if message.reply_to_message:
+        reply_to_id = message.reply_to_message.message_id
+        raw_text = message.reply_to_message.text or "[Non-text message]"
+        reply_to_content = (raw_text[:30] + "..") if len(raw_text) > 30 else raw_text
+
+    await history_service.add_message(
+        chat.id, "user", "[Image: Processing...]", 
+        message_id=message.message_id,
+        reply_to_id=reply_to_id, reply_to_content=reply_to_content,
+        message_type="image", file_id=file_id
+    )
+    
+    # 触发聚合
+    await lazy_sender.on_message(chat.id, context)
+    try:
+        asyncio.create_task(summary_service.check_and_summarize(chat.id))
+    except:
+        pass
+
+
 async def process_voice_message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    语音消息入口
-    1. 鉴权
-    2. 下载语音 → ASR 转文字
-    3. 存入历史 (message_type=voice)
-    4. 触发回复
+    语音消息入口 (聚合模式)
     """
     user = update.effective_user
     chat = update.effective_chat
@@ -94,139 +141,52 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
     if not user or not chat or not message or not message.voice:
         return
     
-    chat_id = chat.id
-    
     # --- 1. 访问控制 ---
     is_adm = is_admin(user.id)
-    
     if chat.type == constants.ChatType.PRIVATE:
-        # 私聊：仅用于管理功能，不作为聊天记录处理
-        if is_adm:
-            pass
+        if is_adm: pass
         return
     else:
-        # 群组：必须在白名单内
         if not await access_service.is_whitelisted(chat.id):
             return
     
     logger.info(f"VOICE [{chat.id}] from {user.first_name}: {message.voice.duration}s")
     
-    # --- 2. 准备上下文并调用多模态模型 ---
-    try:
-        voice = message.voice
-        file = await context.bot.get_file(voice.file_id)
-        voice_bytes = await file.download_as_bytearray()
-        
-        # 获取系统提示词 (仅获取 Soul Prompt，不提前组装，避免嵌套和 Mode 错误)
-        configs = await config_service.get_all_settings()
-        system_prompt_custom = configs.get("system_prompt")
-        
-        # 获取历史记录(用于上下文)
-        history_objs = await history_service.get_recent_messages(chat.id, limit=20)
-        history_context = []
-        for h in history_objs:
-            # 必须包含 message_id，否则 SenderService 无法进行表情回应
-            # 现在也包含 timestamp 以便 voice_service 格式化前缀
-            history_context.append({
-                "role": h.role, 
-                "content": h.content, 
-                "message_id": h.message_id,
-                "chat_id": h.chat_id,
-                "timestamp": h.timestamp
-            })
-            
-        # 调用 Voice Service (多模态对话)
-        # 返回: <transcript>...</transcript><chat>...</chat>
-        xml_response = await voice_service.chat_with_voice(
-            bytes(voice_bytes), 
-            system_prompt_custom, # 传递原始自定义提示词，内层会正确处理模式
-            history_context,
-            chat_id=chat_id
-        )
-        
-        if not xml_response:
-             await context.bot.send_message(chat.id, "⚠️ AI 无法处理该语音，请重试")
-             return
+    file_id = message.voice.file_id
+    
+    # 存入历史 (占位)
+    reply_to_id = None
+    reply_to_content = None
+    if message.reply_to_message:
+        reply_to_id = message.reply_to_message.message_id
+        raw_text = message.reply_to_message.text or "[Non-text message]"
+        reply_to_content = (raw_text[:30] + "..") if len(raw_text) > 30 else raw_text
 
-        # --- 3. 解析 XML ---
-        # 提取 Transcript
-        transcript = "[无法识别语音内容]"
-        match_transcript = re.search(r"<transcript>(.*?)</transcript>", xml_response, flags=re.DOTALL)
-        if match_transcript:
-            transcript = match_transcript.group(1).strip()
-            
-        # 提取 Chat Reply (去除 transcript 标签后的剩余部分，或者直接提取 chat 标签)
-        # 用正则提取所有 <chat> 标签的内容重新组合，或者直接把 xml_response 中的 <transcript> 移除
-        # 更稳健的做法: 提取 transcript 后，把 transcript 标签从 xml_response 中移除，剩下的就是回复内容 (包含 <chat> 标签)
-        # 但通常我们只需要提取 <chat> 里的内容 ? 
-        # 用户之前的逻辑是: <chat> 标签是用来给 sender_service 解析表情的。
-        # 所以我们需要保留 <chat> 标签给 sender_service。
-        # 简单处理: 移除 <transcript>...</transcript> 块
-        reply_content = re.sub(r"<transcript>.*?</transcript>", "", xml_response, flags=re.DOTALL).strip()
-        
-        # 如果回复为空 (只有 transcript?) -> 兜底
-        if not reply_content:
-             reply_content = "<chat>...</chat>"
-
-        logger.info(f"Voice Processed: Transcript='{transcript[:30]}...', Reply='{reply_content[:30]}...'")
-
-        # --- 4. 存入历史 ---
-        # 4.1 用户消息 (Transcript)
-        reply_to_id = None
-        reply_to_content = None
-        if message.reply_to_message:
-            reply_to_id = message.reply_to_message.message_id
-            raw_ref_text = message.reply_to_message.text or "[Non-text message]"
-            reply_to_content = (raw_ref_text[:30] + "..") if len(raw_ref_text) > 30 else raw_ref_text
-
-        await history_service.add_message(
-            chat.id,
-            "user",
-            transcript,
-            message_id=message.message_id,
-            reply_to_id=reply_to_id,
-            reply_to_content=reply_to_content,
-            message_type="voice"
-        )
-        # 将当前消息也加入上下文，方便 sender_service 将表情点在当前语音上
-        history_context.append({
-            "role": "user",
-            "content": transcript,
-            "message_id": message.message_id,
-            "chat_id": chat.id,
-            "timestamp": message.date # Telegram 消息自带 datetime 对象
-        })
-        
-        # 4.2 助手回复
-        # 注意: 这里我们跳过了 LazySender 的队列，因为语音回复是即时的且已经生成好了
-        # 直接由 SenderService 发送
-        
-        # --- 5. 发送回复 ---
-        # 统一委托给 SenderService 处理：解析标签、表情、TTS、历史记录
-        await sender_service.send_llm_reply(
-            chat_id=chat_id,
-            reply_content=reply_content,
-            context=context,
-            history_msgs=history_context,
-            message_type='voice'
-        )
-
-    except Exception as e:
-        logger.error(f"Voice processing failed: {e}")
-        await context.bot.send_message(chat.id, f"⚠️ 处理失败: {e}")
-
-    # 触发总结 (Async)
+    await history_service.add_message(
+        chat.id, "user", "[Voice: Processing...]",
+        message_id=message.message_id,
+        reply_to_id=reply_to_id, reply_to_content=reply_to_content,
+        message_type="voice", file_id=file_id
+    )
+    
+    # 触发聚合
+    await lazy_sender.on_message(chat.id, context)
     try:
         asyncio.create_task(summary_service.check_and_summarize(chat.id))
-    except Exception:
+    except:
         pass
+
 
 async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     """
-    核心回复生成逻辑 (LazySender 回调)
-    1. 读取历史
-    2. 调用 LLM
-    3. 发送回复
+    核心回复生成逻辑 (支持多模态聚合)
+    1. 获取历史
+    2. 扫描 Recent Assistant 之后的 User Messages
+    3. 提取 pending 的图片/语音并下载转换
+    4. 构造 Multimodal Payload
+    5. 调用 LLM
+    6. 解析结果 (Summary/Transcript) 并回填 DB
+    7. 发送回复
     """
     logger.info(f"Generate Response triggered for Chat {chat_id}")
     
@@ -242,103 +202,236 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
 
     dynamic_summary = await summary_service.get_summary(chat_id)
-
-    system_content = prompt_builder.build_system_prompt(
-        system_prompt_custom, 
-        timezone=timezone, 
-        dynamic_summary=dynamic_summary,
-        mode="text"
-    )
-    
-    # 安全转换配置值，范围 100-50000
+    # Token limit check
     target_tokens = safe_int_config(
         configs.get("history_tokens"),
         settings.HISTORY_WINDOW_TOKENS,
-        min_val=100,
-        max_val=50000
+        min_val=100, max_val=50000
     )
-        
+    
+    # 1. 获取基础历史记录
     history_msgs = await history_service.get_token_controlled_context(chat_id, target_tokens=target_tokens)
     
-    messages = [{"role": "system", "content": system_content}]
+    # 2. 识别“尾部”聚合区间 (自上一条 Assistant 消息之后的所有 User 消息)
+    last_assistant_idx = -1
+    for i in range(len(history_msgs) - 1, -1, -1):
+        if history_msgs[i].role == 'assistant':
+            last_assistant_idx = i
+            break
+            
+    if last_assistant_idx == -1:
+        # 如果最近200条里都没有 assistant，全量作为 user 输入
+        tail_msgs = history_msgs
+        base_msgs = []
+    else:
+        base_msgs = history_msgs[:last_assistant_idx+1]
+        tail_msgs = history_msgs[last_assistant_idx+1:]
+        
+    # 3. 扫描聚合区间内的 Pending 多模态内容 (Chronological Processing)
+    pending_images_map = {} # msg_id -> msg object for backfill
+    pending_voices_map = {} # msg_id -> msg object for backfill
+    has_multimodal = False
     
-    # 安全的时区处理
-    try:
-        tz = pytz.timezone(timezone)
-    except pytz.UnknownTimeZoneError:
-        logger.warning(f"Unknown timezone '{timezone}', fallback to UTC")
-        tz = pytz.UTC
-        
-    for h in history_msgs:
-        if h.timestamp:
-            try:
-                if h.timestamp.tzinfo is None:
-                    utc_time = h.timestamp.replace(tzinfo=pytz.UTC)
-                else:
-                    utc_time = h.timestamp
-                local_time = utc_time.astimezone(tz)
-                time_str = local_time.strftime("%Y-%m-%d %H:%M:%S")
-            except:
-                time_str = "Time Error"
-        else:
-            time_str = "Unknown Time"
-        
-        # 统一 ID 标识符
-        msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
-        prefix = f"[{msg_id_str}] [{time_str}] "
+    # 构建 Multimodal Content Blocks (严格按时间顺序)
+    multimodal_content = []
+    
+    # 只要检测到由 lazy_sender 触发的聚合 (context.args check is not reliable here, rely on tail_msgs scanning)
+    # 我们遍历 tail_msgs，只要发现任何 pending 媒体，就开启多模态模式
+    
+    # 预扫描以决定 system prompt mode
+    for msg in tail_msgs:
+        if "[Image: Processing...]" in msg.content or "[Voice: Processing...]" in msg.content:
+            has_multimodal = True
+            break
 
-        if h.role == 'user':
+    if has_multimodal:
+        logger.info(f"Multimodal Batch Triggered. Processing {len(tail_msgs)} tail messages chronologically.")
+        
+        for msg in tail_msgs:
+            if msg.role != 'user': 
+                continue
+                
+            content_marker = msg.content
+            
+            # Case A: Image
+            if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in content_marker:
+                try:
+                    # Download & Process
+                    f = await context.bot.get_file(msg.file_id)
+                    b = await f.download_as_bytearray()
+                    b64 = await voice_service.process_image_to_base64(bytes(b))
+                    
+                    if b64:
+                        # Append Interleaved Blocks
+                        multimodal_content.append({
+                            "type": "text",
+                            "text": f"Image [MSG {msg.message_id}]:"
+                        })
+                        multimodal_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{b64}"
+                            }
+                        })
+                        pending_images_map[msg.message_id] = msg
+                except Exception as e:
+                    logger.error(f"Image DL failed for MSG {msg.message_id}: {e}")
+                    multimodal_content.append({"type": "text", "text": f"[Image Download Failed for MSG {msg.message_id}]"})
+
+            # Case B: Voice
+            elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in content_marker:
+                try:
+                    # Download & Process
+                    f = await context.bot.get_file(msg.file_id)
+                    b = await f.download_as_bytearray()
+                    b64 = await voice_service.process_audio_to_base64(bytes(b))
+                    
+                    if b64:
+                        # Append Interleaved Blocks
+                        multimodal_content.append({
+                            "type": "text",
+                            "text": f"Voice [MSG {msg.message_id}]:"
+                        })
+                        multimodal_content.append({
+                            "type": "input_audio",
+                            "input_audio": {
+                                "data": b64,
+                                "format": "wav"
+                            }
+                        })
+                        pending_voices_map[msg.message_id] = msg
+                except Exception as e:
+                    logger.error(f"Voice DL failed for MSG {msg.message_id}: {e}")
+                    multimodal_content.append({"type": "text", "text": f"[Voice Download Failed for MSG {msg.message_id}]"})
+            
+            # Case C: Text
+            else:
+                 # 纯文本消息 (可能是之前的文本，或者是混合在中间的文本)
+                 # 过滤掉非 pending 的占位符? 不，只有 "[Image: Processing...]" 是我们要替换的。
+                 # 如果用户发了文字 "Look at this"，这里直接作为 text block
+                 text_content = msg.content
+                 if text_content:
+                     multimodal_content.append({
+                         "type": "text",
+                         "text": text_content
+                     })
+
+        # Final Payload Assignment
+        # append a final instructions prompt if needed? 
+        # The system prompt handles the protocol.
+        # Maybe add a small footer to ensure LLM knows context ended?
+        if not multimodal_content:
+             multimodal_content.append({"type": "text", "text": "Please process the updated context."})
+             
+        # Add "Please process..." trigger if the last item wasn't an explicit instruction?
+        # Better to just let the system prompt drive it.
+        
+        messages.append({"role": "user", "content": multimodal_content})
+
+    else:
+        # Standard Text Flow (No Multimodal)
+        
+    else:
+        # 普通文本模式：直接追加
+        for h in tail_msgs:
+            # 同样格式化
+            time_str = "Unknown"
+            if h.timestamp:
+                 try:
+                    dt = h.timestamp.replace(tzinfo=pytz.UTC) if h.timestamp.tzinfo is None else h.timestamp
+                    time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+                 except: pass
+            msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
+            prefix = f"[{msg_id_str}] [{time_str}] "
             if h.reply_to_content:
                 prefix += f'(Reply to "{h.reply_to_content}") '
-            messages.append({"role": "user", "content": prefix + h.content})
-        elif h.role == 'system':
-            messages.append({"role": "system", "content": prefix + h.content})
-        else:
-            messages.append({"role": "assistant", "content": prefix + h.content})
-        
-    # 安全转换 temperature，范围 0.0-2.0
-    current_temp = safe_float_config(
-        configs.get("temperature", "0.7"),
-        default=0.7,
-        min_val=0.0,
-        max_val=2.0
-    )
+            messages.append({"role": h.role, "content": prefix + h.content})
 
+    # 7. 调用 LLM
+    current_temp = safe_float_config(configs.get("temperature", "0.7"), 0.7, 0.0, 2.0)
+    
     try:
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        
+        # 注意: modalities=["text"] 在 audio preview 模型中通常是必须的
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
             temperature=current_temp,
-            max_tokens=4000
+            max_tokens=4000,
+            modalities=["text"] 
         )
         
-        # 检查 LLM 响应有效性
         if not response.choices or not response.choices[0].message.content:
-            logger.warning(f"LLM ({model}) returned EMPTY content.")
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="⚠️ AI 未返回有效回复，请稍后重试或检查配置"
-            )
+            await context.bot.send_message(chat_id, "⚠️ AI 返回空内容")
             return
-        
+            
         reply_content = response.choices[0].message.content.strip()
-        logger.info(f"RAW LLM OUTPUT: {reply_content!r}")
+        logger.info(f"LLM Response: {reply_content[:100]}...")
         
-        # --- 5. 处理并发送回复 ---
-        # 统一委托给 SenderService 处理：解析标签、模拟延迟、表情回应、多气泡/语音、历史持久化
+        # 8. 解析结果并回填 (Backfill)
+        # 8.1 语音 Transcript (XML + MsgID 匹配)
+        transcript_matches = list(re.finditer(r'<transcript\s+msg_id=["\'](\d+)["\']>(.*?)</transcript>', reply_content, flags=re.DOTALL))
+        
+        if transcript_matches and pending_voices_map:
+            for match in transcript_matches:
+                try:
+                    msg_id = int(match.group(1))
+                    content = match.group(2).strip()
+                    
+                    if msg_id in pending_voices_map:
+                        target_msg = pending_voices_map[msg_id]
+                        await history_service.update_message_content_by_file_id(target_msg.file_id, content)
+                        logger.info(f"Backfilled transcript for MSG {msg_id}")
+                    else:
+                        logger.warning(f"Transcript msg_id {msg_id} not found in pending voices map")
+                except Exception as e:
+                     logger.error(f"Failed to parse transcript match: {e}")
+
+            # 清理回复中的 transcript 标签，避免发给用户
+            reply_content = re.sub(r"<transcript.*?>.*?</transcript>", "", reply_content, flags=re.DOTALL).strip()
+            
+        # 8.2 图片 Summary (XML + MsgID 匹配)
+        # 匹配 <img_summary msg_id="123">...</img_summary>
+        img_summary_matches = list(re.finditer(r'<img_summary\s+msg_id=["\'](\d+)["\']>(.*?)</img_summary>', reply_content, flags=re.DOTALL))
+        
+        if img_summary_matches and pending_images_map:
+            for match in img_summary_matches:
+                try:
+                    msg_id = int(match.group(1))
+                    content = match.group(2).strip()
+                    
+                    if msg_id in pending_images_map:
+                        target_msg = pending_images_map[msg_id]
+                        final_summary = f"[Image Summary: {content}]" 
+                        await history_service.update_message_content_by_file_id(target_msg.file_id, final_summary)
+                        logger.info(f"Backfilled summary for MSG {msg_id}")
+                    else:
+                        logger.warning(f"Image summary msg_id {msg_id} not found in pending images map")
+                except Exception as e:
+                    logger.error(f"Failed to parse image summary match: {e}")
+            
+            # 清理回复中的 img_summary 标签
+            reply_content = re.sub(r"<img_summary.*?>.*?</img_summary>", "", reply_content, flags=re.DOTALL).strip()
+            
+        if not reply_content:
+            reply_content = "<chat>...</chat>" # 兜底
+
+        # 9. 发送回复
         await sender_service.send_llm_reply(
             chat_id=chat_id,
             reply_content=reply_content,
             context=context,
-            history_msgs=history_msgs
+            # 这里 history_msgs 还是旧的 (含 placeholder)。
+            # 理想情况下应该更新 history_msgs 里的内容再传给 sender?
+            # 但 sender 主要用它来做表情回应定位 (message_id)，内容不关键。
+            history_msgs=history_msgs 
         )
 
     except Exception as e:
         logger.error(f"API Call failed: {e}")
-        if is_admin(chat_id) and chat_id > 0:
-             await context.bot.send_message(chat_id=chat_id, text=f"❌ API 调用失败: {e}")
+        if is_admin(chat_id):
+            await context.bot.send_message(chat_id, f"❌ API Error: {e}")
+
 
 async def process_reaction_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理表情回应更新"""
