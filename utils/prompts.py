@@ -83,10 +83,11 @@ class PromptBuilder:
 """
 
     @classmethod
-    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = None, mode: str = "text") -> str:
+    def build_system_prompt(cls, soul_prompt: str = None, timezone: str = "UTC", dynamic_summary: str = None, has_voice: bool = False, has_image: bool = False) -> str:
         """
         组装完整的 System Prompt
-        :param mode: 'text' 或 'voice'
+        :param has_voice: 是否启用语音模式协议 (含转录与XML)
+        :param has_image: (预留) 是否启用视觉协议
         """
         import pytz
         try:
@@ -123,7 +124,9 @@ class PromptBuilder:
         )
 
         # 4. Protocol (基于模式动态选择)
-        protocol = cls.PROTOCOL_VOICE if mode == "voice" else cls.PROTOCOL_TEXT
+        # 只要涉及语音，就必须使用 Voice Protocol 以支持 <transcript>
+        # 如果仅有图片，目前 Text Protocol 也能兼容 (简单回复)，但 Voice Protocol 定义了 <img_summary>，建议多模态统一用 Voice Protocol
+        protocol = cls.PROTOCOL_VOICE if (has_voice or has_image) else cls.PROTOCOL_TEXT
         
         # 5. Constraints
         constraints = cls.CONSTRAINTS_TEMPLATE
