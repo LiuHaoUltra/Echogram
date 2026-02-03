@@ -409,14 +409,15 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             reply_content = "<chat>...</chat>" # 兜底
 
         # 9. 发送回复
+        # 只要包含语音输入，一律采用语音响应
+        reply_mtype = 'voice' if has_v else 'text'
+        
         await sender_service.send_llm_reply(
             chat_id=chat_id,
             reply_content=reply_content,
             context=context,
-            # 这里 history_msgs 还是旧的 (含 placeholder)。
-            # 理想情况下应该更新 history_msgs 里的内容再传给 sender?
-            # 但 sender 主要用它来做表情回应定位 (message_id)，内容不关键。
-            history_msgs=history_msgs 
+            history_msgs=history_msgs,
+            message_type=reply_mtype
         )
 
     except Exception as e:
