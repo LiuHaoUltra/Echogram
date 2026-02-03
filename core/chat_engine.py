@@ -469,8 +469,18 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         except Exception as cleanup_err:
             logger.error(f"Failed to cleanup pending placeholders: {cleanup_err}")
 
-        if is_admin(chat_id):
-            await context.bot.send_message(chat_id, f"❌ API Error: {e}")
+        # 强制通知管理员 (私聊推送)
+        try:
+            from config.settings import settings
+            error_msg = (
+                f"🚨 <b>API Call Failed</b>\n\n"
+                f"会话 ID: <code>{chat_id}</code>\n"
+                f"错误详情: <code>{e}</code>\n\n"
+                f"💡 <i>上下文污染已自动清理，请检查 API 余额或网络环境。</i>"
+            )
+            await context.bot.send_message(settings.ADMIN_USER_ID, error_msg, parse_mode='HTML')
+        except Exception as notify_err:
+            logger.error(f"Failed to notify admin privately: {notify_err}")
 
 
 async def process_reaction_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
