@@ -244,15 +244,34 @@ class NewsPushService:
 
     async def _is_active_hours(self) -> bool:
         from core.config_service import config_service
+        import pytz
+        
         start_str = await config_service.get_value("agentic_active_start", "08:00")
         end_str = await config_service.get_value("agentic_active_end", "23:00")
+        timezone_str = await config_service.get_value("timezone", "UTC")
+        
         try:
-            now = datetime.now().time()
+            # 1. 获取目标时区
+            try:
+                tz = pytz.timezone(timezone_str)
+            except:
+                tz = pytz.UTC
+            
+            # 2. 获取该时区的当前时间
+            now = datetime.now(tz).time()
+            
+            # 3. 解析配置的时段
             start = datetime.strptime(start_str, "%H:%M").time()
             end = datetime.strptime(end_str, "%H:%M").time()
-            if start <= end: return start <= now <= end
-            else: return start <= now or now <= end
-        except: return 8 <= datetime.now().hour <= 23
+            
+            if start <= end:
+                return start <= now <= end
+            else:
+                # 跨天处理 (如 23:00 - 08:00)
+                return start <= now or now <= end
+        except Exception as e:
+            logger.warning(f"Active hours check failed ({e}), defaulting to 08-23 (UTC).")
+            return 8 <= datetime.utcnow().hour <= 23
 
     async def _is_chat_idle(self, chat_id: int) -> bool:
         from core.config_service import config_service

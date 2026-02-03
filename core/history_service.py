@@ -17,13 +17,16 @@ class HistoryService:
         if not text: return 0
         return len(self._encoding.encode(text))
 
-    def _truncate_content(self, text: str, limit: int) -> str:
-        """物理截断：保留头尾，中间替换"""
-        if not text or len(text) < limit:
+    def _truncate_content(self, text: str, char_limit: int = 6000) -> str:
+        """
+        物理截断：保留头尾，中间替换
+        :param char_limit: 字符限制（非 Token）
+        """
+        if not text or len(text) < char_limit:
             return text
         
-        # 保留头尾各 30% 的字符长度
-        keep = int(limit * 0.3)
+        # 保留头尾各 30% 的内容
+        keep = int(char_limit * 0.3)
         return f"{text[:keep]}\n\n[... Content Truncated due to safety limit ({len(text)} chars) ...]\n\n{text[-keep:]}"
 
     async def clear_history(self, chat_id: int):
@@ -75,68 +78,69 @@ class HistoryService:
             selected = []
             current_tokens = 0
 
-            # 贪婪填充
-            # 定义单条消息物理截断阈值 (防止恶意刷 Token)
-            hard_limit = int(target_tokens * 1.5)
+            # 定义物理强度截断（针对恶意刷内容） 
+            # 这里的阈值设为 8000 字符左右，约合 2000-3000 Tokens
+            CHAR_HARD_LIMIT = 8000 
             
             for i, msg in enumerate(candidates):
                 # 预处理：物理截取单条极长消息
-                content = self._truncate_content(msg.content, hard_limit)
+                content = self._truncate_content(msg.content, CHAR_HARD_LIMIT)
 
                 # 估算包含前缀的消息长度
                 msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {content}\n"
                 cost = self.count_tokens(msg_text)
                 
-                # 兜底：即使第一条消息就爆了预算，也强行包含它，否则 AI 无法感知当前输入
+                # 兜底：即使第一条消息就爆了预算，也强行包含它
                 if i > 0 and current_tokens + cost > target_tokens:
-                    break # 满了，且不是第一条，停止
+                    break 
                 
-                # 更新对象内容以便后续使用 (非持久化更新)
                 msg.content = content
                 selected.append(msg)
                 current_tokens += cost
 
-            # 恢复时间顺序
             return list(reversed(selected))
 
-    async def calculate_context_usage(self, chat_id: int, target_tokens: int) -> int:
+    async def get_session_stats(self, chat_id: int, target_tokens: int, last_summarized_id: int = 0):
         """
-        计算当前上下文实际占用的 Token 数
+        统一计算会话统计数据：活跃窗口 Token、缓冲区 Token
         """
         async for session in get_db_session():
-            stmt = select(History).where(History.chat_id == chat_id)\
-                .order_by(History.timestamp.desc()).limit(200)
+            stmt = select(History).where(History.chat_id == chat_id).order_by(History.id.desc())
             result = await session.execute(stmt)
-            candidates = result.scalars().all()
+            all_msgs = result.scalars().all()
 
-            current_tokens = 0 # Initialize current_tokens
-            hard_limit = int(target_tokens * 1.5)
-            for i, msg in enumerate(candidates):
-                content = self._truncate_content(msg.content, hard_limit)
-                # 同步估算模型
-                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {content}\n"
-                cost = self.count_tokens(msg_text)
-                if i > 0 and current_tokens + cost > target_tokens:
+            if not all_msgs:
+                return {"active_tokens": 0, "buffer_tokens": 0, "win_start_id": 0, "total_msgs": 0}
+
+            active_tokens = 0
+            win_start_id = all_msgs[0].id
+            CHAR_HARD_LIMIT = 8000
+
+            # 1. 计算活跃窗口
+            for i, m in enumerate(all_msgs):
+                content = self._truncate_content(m.content, CHAR_HARD_LIMIT)
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{m.message_type or 'Text'}] {m.role}: {content}\n"
+                t = self.count_tokens(msg_text)
+                
+                if i > 0 and active_tokens + t > target_tokens:
                     break
-                current_tokens += cost
-            
-            return current_tokens
+                active_tokens += t
+                win_start_id = m.id
 
-    async def get_recent_context(self, chat_id: int, limit: int = 10):
-        """[Deprecated] 获取最近 N 条记录 (正序返回)"""
-        async for session in get_db_session():
-            stmt = select(History)\
-                .where(History.chat_id == chat_id)\
-                .order_by(History.timestamp.desc())\
-                .limit(limit)
-            
-            result = await session.execute(stmt)
-            history = result.scalars().all()
-            return list(reversed(history))
+            # 2. 计算缓冲区 (last_summarized_id -> win_start_id 之间)
+            buffer_tokens = 0
+            for m in all_msgs:
+                if last_summarized_id < m.id < win_start_id:
+                    content = self._truncate_content(m.content, CHAR_HARD_LIMIT)
+                    msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{m.message_type or 'Text'}] {m.role}: {content}\n"
+                    buffer_tokens += self.count_tokens(msg_text)
 
-    async def get_recent_messages(self, chat_id: int, limit: int = 20):
-        """获取最近消息 (Alias for context retrieval)"""
-        return await self.get_recent_context(chat_id, limit)
+            return {
+                "active_tokens": active_tokens,
+                "buffer_tokens": buffer_tokens,
+                "win_start_id": win_start_id,
+                "total_msgs": len(all_msgs)
+            }
 
     async def get_last_message_time(self, chat_id: int):
         """获取最近一条消息的时间"""

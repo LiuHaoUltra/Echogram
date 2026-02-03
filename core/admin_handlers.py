@@ -51,96 +51,64 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 获取归档状态
     from core.summary_service import summary_service
+    from core.history_service import history_service
+    
     status = await summary_service.get_status(chat.id)
     last_summarized_id = status["last_id"]
     last_summary_time = status["updated_at"]
     
-    # 获取消息并识别活跃窗口
-    from config.database import get_db_session
-    from models.history import History
-    from core.history_service import history_service
-    from sqlalchemy import select
+    # 使用统一接口获取统计数据
+    stats = await history_service.get_session_stats(chat.id, T, last_summarized_id)
+    active_tokens = stats["active_tokens"]
+    buffer_tokens = stats["buffer_tokens"]
     
-    buffer_tokens = 0
-    active_tokens = 0
-    
-    async for session in get_db_session():
-        stmt_all = select(History).where(History.chat_id == chat.id).order_by(History.id.desc())
-        result_all = await session.execute(stmt_all)
-        all_msgs = result_all.scalars().all()
-        
-        if not all_msgs:
-            break
+    # 进度条辅助函数
+    def make_bar(current, total, length=10):
+        if total <= 0: return "░" * length
+        filled = int(length * (current / total))
+        filled = min(filled, length)
+        return "█" * filled + "░" * (length - filled)
 
-        # 识别活跃窗口起始 ID (从最新消息向后数)
-        curr_t = 0
-        win_start_id = all_msgs[0].id
-        for m in all_msgs:
-            # 必须使用与 summary_service 相同的估算模板 (含 Type 和 Role)
-            msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{m.message_type or 'Text'}] {m.role}: {m.content}\n"
-            t = history_service.count_tokens(msg_text)
-            if curr_t + t > T and curr_t > 0:
-                break
-            curr_t += t
-            active_tokens = curr_t
-            win_start_id = m.id
-            
-        # 获取时区
-        timezone = configs.get("timezone", "UTC")
-        import pytz
-        try:
-            tz = pytz.timezone(timezone)
-        except:
-            tz = pytz.UTC
-
-        # 计算缓冲区 (位于 last_summarized_id 和 win_start_id 之间)
-        buffer_text = ""
-        # 注意：这里需要按时间正序拼接，且包含完整前缀以模拟真实总结负载
-        for m in reversed(all_msgs):
-            if last_summarized_id < m.id < win_start_id:
-                # 必须使用与 summary_service 相同的真实时间戳格式
-                m_time_str = "Unknown"
-                if m.timestamp:
-                    try:
-                        dt = m.timestamp.replace(tzinfo=pytz.UTC) if m.timestamp.tzinfo is None else m.timestamp
-                        m_time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
-                    except: pass
-                
-                m_id_str = f"MSG {m.message_id}" if m.message_id else "MSG ?"
-                m_type = m.message_type.capitalize() if m.message_type else "Text"
-                # 格式: [MSG ID] [Timestamp] [Type] Role: Content
-                buffer_text += f"[{m_id_str}] [{m_time_str}] [{m_type}] {m.role}: {m.content}\n"
-        buffer_tokens = history_service.count_tokens(buffer_text)
+    # 计算百分比
+    active_percent = round((active_tokens / T) * 100, 1) if T > 0 else 0
+    buffer_percent = round((buffer_tokens / T) * 100, 1) if T > 0 else 0
     
-    # 判断会话状态与进度条口径
+    # 状态判定
     if buffer_tokens > 0:
         session_state = "🔄 Rolling (Archiving)"
-        progress_label = "Archiving Buffer (Pending Summary)"
-        current_val = buffer_tokens
-        usage_percent = round((buffer_tokens / T) * 100, 1) if T > 0 else 0
+        state_desc = "旧记忆正在向缓冲区溢出，进入滚动上下文。"
     else:
         session_state = "🌱 Growing (Linear)"
-        progress_label = "Memory Growth (Direct Memory)"
-        current_val = active_tokens
-        usage_percent = round((active_tokens / T) * 100, 1) if T > 0 else 0
+        state_desc = "记忆尚未填满上限，直接由 LLM 读取。"
 
-    bar_len = 10
-    filled_len = int(bar_len * (current_val / T)) if T > 0 else 0
-    if filled_len > bar_len: filled_len = bar_len
-    progress_bar = "█" * filled_len + "░" * (bar_len - filled_len)
+    # 获取时区设定
+    timezone_str = configs.get("timezone", "UTC")
+    import pytz
+    try:
+        tz = pytz.timezone(timezone_str)
+    except:
+        tz = pytz.UTC
 
-    # 格式化日期
-    time_str = last_summary_time.strftime("%Y-%m-%d %H:%M:%S") if last_summary_time else "N/A"
+    # 格式化日期 (应用时区转换)
+    if last_summary_time:
+        # 如果是 naive datetime，假设其为 UTC
+        if last_summary_time.tzinfo is None:
+            last_summary_time = last_summary_time.replace(tzinfo=pytz.UTC)
+        time_str = last_summary_time.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        time_str = "Never"
 
     msg = (
         f"📊 <b>Session Statistics</b>\n\n"
         f"🆔 Chat ID: <code>{chat.id}</code>\n"
-        f"📈 <b>Session State</b>: <code>{session_state}</code>\n\n"
-        f"🧠 <b>{progress_label}</b>:\n"
-        f"<code>{progress_bar} {usage_percent}%</code>\n"
-        f"({current_val} / {T} tokens)\n\n"
-        f"👀 <b>Active Window</b> (Direct Memory):\n"
-        f"<code>{active_tokens} tokens</code>\n\n"
+        f"📈 <b>State</b>: <code>{session_state}</code>\n"
+        f"<i>{state_desc}</i>\n\n"
+        f"🧠 <b>Context Usage</b>:\n"
+        f"<code>{make_bar(active_tokens, T)} {active_percent}%</code>\n"
+        f"({active_tokens} / {T} tokens)\n\n"
+        f"📥 <b>Archiving Buffer</b>:\n"
+        f"<code>{make_bar(buffer_tokens, T)} {buffer_percent}%</code>\n"
+        f"({buffer_tokens} / {T} tokens)\n\n"
         f"🕒 Last Summary: {time_str}"
     )
     
