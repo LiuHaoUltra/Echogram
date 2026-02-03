@@ -234,17 +234,17 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # 第一部分：静态协议与人设
         safe_static = html.escape(full_static_prompt)
+        if len(safe_static) > 3500:
+             safe_static = safe_static[:3500] + "\n\n... (Static Part Truncated)"
         content_static = f"{header}<b>[1/2] System Protocol (Static)</b>\n<pre>{safe_static}</pre>"
-        if len(content_static) > 4000:
-             content_static = content_static[:3900] + "\n\n... (Static Part Truncated)"
         
         await context.bot.send_message(user.id, content_static, parse_mode='HTML')
         
         # 第二部分：动态记忆与上下文
         safe_dynamic = html.escape(dynamic_preview)
+        if len(safe_dynamic) > 3500:
+             safe_dynamic = safe_dynamic[:3500] + "\n\n... (Dynamic Part Truncated)"
         content_dynamic = f"<b>[2/2] Memory & Context (Dynamic)</b>\n<pre>{safe_dynamic}</pre>"
-        if len(content_dynamic) > 4000:
-             content_dynamic = content_dynamic[:3900] + "\n\n... (Dynamic Part Truncated)"
 
         await context.bot.send_message(user.id, content_dynamic, parse_mode='HTML')
         
