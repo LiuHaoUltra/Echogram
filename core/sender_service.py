@@ -157,7 +157,8 @@ class SenderService:
         # 3. 记录历史
         await history_service.add_message(
             chat_id, "assistant", cleaned_reply_content, 
-            message_id=last_sent_msg_id
+            message_id=last_sent_msg_id,
+            message_type=message_type
         )
         
         # 4. 触发总结检查
