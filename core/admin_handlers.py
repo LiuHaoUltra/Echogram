@@ -135,6 +135,8 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
 
+    if not is_admin(user.id):
+        return
     if chat.type == constants.ChatType.PRIVATE:
         await update.message.reply_text("💡 请在群组中使用此指令，以预览针对该群组生成的提示词。")
         return
@@ -232,18 +234,27 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 4. 分段发送私聊
     try:
-        # 第一部分：静态协议与人设
+        # 第一部分：静态协议与人设 (如果超长，保留尾部最新的 Protocol 定义)
         safe_static = html.escape(full_static_prompt)
         if len(safe_static) > 3500:
-             safe_static = safe_static[:3500] + "\n\n... (Static Part Truncated)"
+             safe_static = "... (Head Omitted)\n" + safe_static[-3500:]
         content_static = f"{header}<b>[1/2] System Protocol (Static)</b>\n<pre>{safe_static}</pre>"
         
         await context.bot.send_message(user.id, content_static, parse_mode='HTML')
         
-        # 第二部分：动态记忆与上下文
+        # 第二部分：动态记忆与上下文 (如果是超长，保留摘要，截断中间的旧历史)
         safe_dynamic = html.escape(dynamic_preview)
         if len(safe_dynamic) > 3500:
-             safe_dynamic = safe_dynamic[:3500] + "\n\n... (Dynamic Part Truncated)"
+             # 尝试寻找 "# 最近上下文" 作为分割点
+             marker = html.escape("# 最近上下文 (Recent Context)")
+             if marker in safe_dynamic:
+                 head_part, tail_part = safe_dynamic.split(marker, 1)
+                 # 保留摘要头，以及上下文尾部 2000 字符
+                 safe_dynamic = f"{head_part}{marker}\n... (Earlier history omitted)\n{tail_part[-2000:]}"
+             else:
+                 # 兜底截断尾部
+                 safe_dynamic = "... (Head Omitted)\n" + safe_dynamic[-3500:]
+                 
         content_dynamic = f"<b>[2/2] Memory & Context (Dynamic)</b>\n<pre>{safe_dynamic}</pre>"
 
         await context.bot.send_message(user.id, content_dynamic, parse_mode='HTML')
