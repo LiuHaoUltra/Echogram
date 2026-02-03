@@ -12,7 +12,7 @@ from core.summary_service import summary_service
 from config.settings import settings
 from core.secure import is_admin
 from core.lazy_sender import lazy_sender
-from core.voice_service import voice_service, TTSNotConfiguredError, VoiceServiceError
+from core.media_service import media_service, TTSNotConfiguredError, MediaServiceError
 from utils.logger import logger
 from utils.prompts import prompt_builder
 from utils.config_validator import safe_int_config, safe_float_config
@@ -259,7 +259,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     # Download & Process
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
-                    b64 = await voice_service.process_image_to_base64(bytes(b))
+                    b64 = await media_service.process_image_to_base64(bytes(b))
                     
                     if b64:
                         # Append Interleaved Blocks
@@ -284,7 +284,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     # Download & Process
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
-                    b64 = await voice_service.process_audio_to_base64(bytes(b))
+                    b64 = await media_service.process_audio_to_base64(bytes(b))
                     
                     if b64:
                         # Append Interleaved Blocks
@@ -328,10 +328,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         
         messages.append({"role": "user", "content": multimodal_content})
 
-    else:
-        # Standard Text Flow (No Multimodal)
-        
-    else:
+
         # 普通文本模式：直接追加
         for h in tail_msgs:
             # 同样格式化

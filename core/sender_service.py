@@ -3,7 +3,7 @@ import re
 from telegram import Update, constants, ReactionTypeEmoji
 from telegram.ext import ContextTypes
 from core.history_service import history_service
-from core.voice_service import voice_service
+from core.media_service import media_service
 from utils.logger import logger
 
 class SenderService:
@@ -105,7 +105,7 @@ class SenderService:
             if i > 0:
                 await asyncio.sleep(1.0)
             
-            if message_type == 'voice' and await voice_service.is_tts_configured():
+            if message_type == 'voice' and await media_service.is_tts_configured():
                 # --- 语音模式发送 ---
                 # 清洗文本 (移除所有 XML 标签，防止 TTS 读出标签)
                 clean_text = re.sub(r'<[^>]+>', '', content).strip()
@@ -117,7 +117,7 @@ class SenderService:
                 await asyncio.sleep(rec_duration)
 
                 try:
-                    voice_bytes = await voice_service.text_to_speech(clean_text)
+                    voice_bytes = await media_service.text_to_speech(clean_text)
                     await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
                     
                     import time

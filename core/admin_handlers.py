@@ -140,14 +140,14 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. 获取配置与摘要
     from core.config_service import config_service
     from core.summary_service import summary_service
-    from core.voice_service import voice_service # 引入用于检测类型
+    from core.media_service import media_service # 引入用于检测类型
     from utils.prompts import prompt_builder
     from config.settings import settings
     import html
 
     # 1.1 检测最后的交互模式
     try:
-        last_msg_type = await voice_service.get_last_user_message_type(chat.id)
+        last_msg_type = await media_service.get_last_user_message_type(chat.id)
         # 简单映射：根据最后一条消息类型来预览 Protocol
         # 注意：这只是为了预览 System Prompt，真实聊天中是根据当次 Payload 动态生成的
         simulated_has_voice = (last_msg_type == "voice")

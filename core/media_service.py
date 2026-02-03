@@ -1,7 +1,8 @@
-"""语音服务模块 - TTS/ASR 功能"""
+"""媒体服务模块 - TTS/ASR/Image 处理功能"""
 
 import base64
 import aiohttp
+import asyncio
 from openai import AsyncOpenAI
 
 from core.config_service import config_service
@@ -10,28 +11,30 @@ from utils.prompts import prompt_builder
 from utils.config_validator import safe_float_config
 
 
-class VoiceServiceError(Exception):
-    """语音服务基础异常"""
+class MediaServiceError(Exception):
+    """媒体服务基础异常"""
     pass
 
 
-
-class TTSNotConfiguredError(VoiceServiceError):
+class TTSNotConfiguredError(MediaServiceError):
     """TTS 未启用或未配置"""
     pass
 
 
-class VoiceService:
-    """语音与多模态服务：ASR、TTS 及 Vision"""
+class MediaService:
+    """媒体与多模态服务：ASR、TTS 及 Vision"""
     
     # is_asr_configured 已移除 (统一使用主模型)
     
     async def process_image_to_base64(self, file_bytes: bytes) -> str:
         """
-        将图片字节流转换为 Base64 字符串 (自动压缩及格式化)
-        - Max Dimension: 2048px
-        - Format: JPEG
-        - Quality: 85
+        将图片字节流转换为 Base64 字符串 (异步包装)
+        """
+        return await asyncio.to_thread(self._sync_process_image_to_base64, file_bytes)
+
+    def _sync_process_image_to_base64(self, file_bytes: bytes) -> str:
+        """
+        [Sync] CPU 密集型图片处理
         """
         import io
         from PIL import Image
@@ -39,10 +42,7 @@ class VoiceService:
         try:
             image = Image.open(io.BytesIO(file_bytes))
             
-            # 尺寸限制 (OpenAI 建议 < 20MB且在合理分辨率内，2048px 足够清晰且省 Token)
             # 尺寸限制 (OpenRouter/OpenAI 最佳实践)
-            # 1. 限制最大边长 2048 (防止超限)
-            # 2. 限制最短边长 768 (Vision 模型原生分辨率，超过此分辨率会被 API 强制压缩)
             w, h = image.size
             
             # 计算缩放比例
@@ -56,7 +56,7 @@ class VoiceService:
                 new_size = (int(w * ratio), int(h * ratio))
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
             
-            # 统一转为 RGB (避免 RGBA 存 JPEG 报错)
+            # 统一转为 RGB
             if image.mode in ('RGBA', 'P'):
                 image = image.convert('RGB')
                 
@@ -66,13 +66,18 @@ class VoiceService:
             
         except Exception as e:
             logger.error(f"Image processing failed: {e}")
-            # 兜底：如果处理失败，尝试原样发送(不推荐)或返回 None
             return base64.b64encode(file_bytes).decode('utf-8')
 
 
     async def process_audio_to_base64(self, file_bytes: bytes) -> str:
         """
-        将 OGG 语音转换为 WAV Base64
+        将 OGG 语音转换为 WAV Base64 (异步包装)
+        """
+        return await asyncio.to_thread(self._sync_process_audio_conversion, file_bytes)
+
+    def _sync_process_audio_conversion(self, file_bytes: bytes) -> str:
+        """
+        [Sync] 音频转码 (OGG -> WAV)
         """
         import uuid
         import os
@@ -101,9 +106,6 @@ class VoiceService:
                 if os.path.exists(temp_wav_path): os.remove(temp_wav_path)
             except Exception as e:
                 logger.warning(f"Failed to clean temp files: {e}")
-
-
-    # build_multimodal_payload 已废弃，逻辑移至 chat_engine (Chronological Loop)
 
 
     async def is_tts_configured(self) -> bool:
@@ -141,41 +143,16 @@ class VoiceService:
              model_name = "gpt-4o-audio-preview"
         
         if not api_key:
-            raise VoiceServiceError("API Key 未配置")
+            raise MediaServiceError("API Key 未配置")
         
-        # Base64 编码音频 (OGG -> WAV 转换)
-        # OpenAI Chat API 不支持 OGG，需转换为 WAV
-        import uuid
-        import os
-        from pydub import AudioSegment
-        import io
-        
-        temp_ogg_path = f"/tmp/{uuid.uuid4()}.ogg"
-        temp_wav_path = f"/tmp/{uuid.uuid4()}.wav"
-        
+        # Base64 编码音频 (OGG -> WAV 转换) - Offload to thread
         try:
-            # 1. 保存 OGG 到临时文件
-            with open(temp_ogg_path, "wb") as f:
-                f.write(voice_file_bytes)
-            
-            # 2. 转换为 WAV
-            audio = AudioSegment.from_ogg(temp_ogg_path)
-            audio.export(temp_wav_path, format="wav")
-            
-            # 3. 读取 WAV 并编码
-            with open(temp_wav_path, "rb") as f:
-                wav_bytes = f.read()
-                base64_audio = base64.b64encode(wav_bytes).decode('utf-8')
-                
+            base64_audio = await asyncio.to_thread(self._sync_process_audio_conversion, voice_file_bytes)
+            if not base64_audio:
+                 raise MediaServiceError("音频预处理返回为空")
         except Exception as e:
-            logger.error(f"音频格式转换失败: {e}")
-            raise VoiceServiceError(f"音频预处理失败: {e}")
-        finally:
-            # 清理临时文件
-            if os.path.exists(temp_ogg_path):
-                os.remove(temp_ogg_path)
-            if os.path.exists(temp_wav_path):
-                os.remove(temp_wav_path)
+             logger.error(f"音频格式转换失败: {e}")
+             raise MediaServiceError(f"音频预处理失败: {e}")
         
         # --- 构造多模态 Messages ---
         
@@ -194,7 +171,7 @@ class VoiceService:
             soul_prompt=system_prompt, # 这里就是原始人设
             timezone=timezone,
             dynamic_summary=dynamic_summary,
-            mode="voice"
+            has_voice=True # Voice interaction always assumes voice present
         )
         
         # 2. 构建上下文
@@ -237,7 +214,7 @@ class VoiceService:
             messages.extend(formatted_history)
             
         # 3. 当前语音消息
-        logger.info(f"Preparing Audio Payload: WAV Size={len(wav_bytes)} bytes, Base64 Len={len(base64_audio)}")
+        logger.info(f"Preparing Audio Payload: WAV Size={len(base64.b64decode(base64_audio))} bytes")
         
         user_content = [
             {
@@ -285,7 +262,7 @@ class VoiceService:
             
         except Exception as e:
             logger.error(f"VoiceChat 调用失败: {e}")
-            raise VoiceServiceError(f"语音服务不可用: {e}")
+            raise MediaServiceError(f"语音服务不可用: {e}")
     
     async def text_to_speech(self, text: str) -> bytes:
         """
@@ -299,11 +276,11 @@ class VoiceService:
             
         Raises:
             TTSNotConfiguredError: TTS 未配置
-            VoiceServiceError: 语音合成失败
+            MediaServiceError: 语音合成失败
         """
         # 输入验证
         if not text or not text.strip():
-            raise VoiceServiceError("待合成文本为空")
+            raise MediaServiceError("待合成文本为空")
         
         # 检查配置
         tts_enabled = await config_service.get_value("tts_enabled", "false")
@@ -353,47 +330,49 @@ class VoiceService:
                 ) as response:
                     if response.status != 200:
                         error_text = await response.text()
-                        raise VoiceServiceError(f"TTS API 返回错误: {response.status} - {error_text}")
+                        raise MediaServiceError(f"TTS API 返回错误: {response.status} - {error_text}")
                     
                     raw_audio_bytes = await response.read()
                     
                     # 2. 使用 ffmpeg (通过 pydub) 转换为标准 Telegram 语音格式 (OGG/OPUS)
                     logger.info("TTS: 正在进行标准 OGG/OPUS 编码转换...")
                     try:
-                        from pydub import AudioSegment
-                        import io
+                        # Offload CPU-heavy transcoding
+                        standard_audio_bytes = await asyncio.to_thread(self._sync_convert_wav_to_ogg, raw_audio_bytes)
                         
-                        # 加载原始音频 (WAV)
-                        audio = AudioSegment.from_file(io.BytesIO(raw_audio_bytes), format="wav")
-                        
-                        # 导出为 OGG，指定使用 libopus 编码器
-                        # 注意：Telegram 核心要求是 opus 编码，封装在 ogg 容器中
-                        buffer = io.BytesIO()
-                        audio.export(buffer, format="ogg", codec="libopus")
-                        
-                        standard_audio_bytes = buffer.getvalue()
                         logger.info(f"TTS 成功: 生成并转换 {len(standard_audio_bytes)} 字节标准语音文件")
-                        
                         return standard_audio_bytes
                         
                     except Exception as e:
                         logger.error(f"TTS 音频格式强制转换失败: {e}")
-                        # 兜底：如果转换失败，返回原始字节流（或者抛出错误）
-                        # 考虑到稳定性，这里抛出错误，因为非标准格式发出去也会导致 UI 问题
-                        raise VoiceServiceError(f"语音格式转换失败 (请确认环境已安装 ffmpeg): {e}")
-                    
+                        raise MediaServiceError(f"语音格式转换失败 (请确认环境已安装 ffmpeg): {e}")
+
         except TTSNotConfiguredError:
             # 重新抛出配置错误
             raise
         except aiohttp.ClientError as e:
             logger.error(f"TTS 网络请求失败: {e}")
-            raise VoiceServiceError(f"TTS 网络请求失败: {e}")
-        except VoiceServiceError:
+            raise MediaServiceError(f"TTS 网络请求失败: {e}")
+        except MediaServiceError:
             # 重新抛出已知的语音服务错误
             raise
         except Exception as e:
             logger.error(f"TTS 合成失败（未预期错误）: {e}")
-            raise VoiceServiceError(f"TTS 合成失败: {e}")
+            raise MediaServiceError(f"TTS 合成失败: {e}")
+
+    def _sync_convert_wav_to_ogg(self, wav_bytes: bytes) -> bytes:
+        """
+        [Sync] 音频转码 (WAV -> OGG/OPUS)
+        """
+        from pydub import AudioSegment
+        import io
+        
+        # 加载原始音频 (WAV)
+        audio = AudioSegment.from_file(io.BytesIO(wav_bytes), format="wav")
+        # 导出为 OGG
+        buffer = io.BytesIO()
+        audio.export(buffer, format="ogg", codec="libopus")
+        return buffer.getvalue()
     
     async def get_last_user_message_type(self, chat_id: int) -> str:
         """
@@ -421,4 +400,4 @@ class VoiceService:
             return message_type or "text"
 
 
-voice_service = VoiceService()
+media_service = MediaService()
