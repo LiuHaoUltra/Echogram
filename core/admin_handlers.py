@@ -187,8 +187,27 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not history_msgs:
         dynamic_preview += "> (No recent history)"
     else:
+        import pytz
+        try:
+            tz = pytz.timezone(timezone)
+        except:
+            tz = pytz.UTC
+
         for m in history_msgs:
-            dynamic_preview += f"[{m.role.upper()}]: {m.content[:200]}{'...' if len(m.content) > 200 else ''}\n"
+            if m.timestamp:
+                try:
+                    ts = m.timestamp.replace(tzinfo=pytz.UTC) if m.timestamp.tzinfo is None else m.timestamp
+                    time_str = ts.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    time_str = "Time Error"
+            else:
+                time_str = "Unknown"
+            
+            msg_id_str = f"MSG {m.message_id}" if m.message_id else "MSG ?"
+            prefix = f"[{msg_id_str}] [{time_str}] "
+            
+            content_snippet = m.content[:200] + ('...' if len(m.content) > 200 else '')
+            dynamic_preview += f"{prefix}[{m.role.upper()}]: {content_snippet}\n"
 
     # 3. 格式化页眉
     from datetime import datetime

@@ -220,124 +220,119 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             break
             
     if last_assistant_idx == -1:
-        # 如果最近200条里都没有 assistant，全量作为 user 输入
         tail_msgs = history_msgs
         base_msgs = []
     else:
         base_msgs = history_msgs[:last_assistant_idx+1]
         tail_msgs = history_msgs[last_assistant_idx+1:]
+
+    # 3. 准备系统提示词
+    # 只要末尾存在语音或图片，就启用对应的多模态协议
+    has_v = any(m.message_type == 'voice' for m in tail_msgs)
+    has_i = any(m.message_type == 'image' for m in tail_msgs)
+    
+    system_content = prompt_builder.build_system_prompt(
+        soul_prompt=system_prompt_custom, 
+        timezone=timezone, 
+        dynamic_summary=dynamic_summary,
+        has_voice=has_v,
+        has_image=has_i
+    )
+    
+    messages = [{"role": "system", "content": system_content}]
+    
+    # 时区处理
+    import pytz
+    try:
+        tz = pytz.timezone(timezone)
+    except:
+        tz = pytz.UTC
+
+    # 4. 填充基础历史 (base_msgs)
+    for h in base_msgs:
+        time_str = "Unknown"
+        if h.timestamp:
+            try:
+                dt = h.timestamp.replace(tzinfo=pytz.UTC) if h.timestamp.tzinfo is None else h.timestamp
+                time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+            except: pass
         
-    # 3. 扫描聚合区间内的 Pending 多模态内容 (Chronological Processing)
-    pending_images_map = {} # msg_id -> msg object for backfill
-    pending_voices_map = {} # msg_id -> msg object for backfill
+        msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
+        prefix = f"[{msg_id_str}] [{time_str}] "
+        if h.reply_to_content:
+            prefix += f'(Reply to "{h.reply_to_content}") '
+        messages.append({"role": h.role, "content": prefix + h.content})
+
+    # 5. 扫描聚合区间内的 Pending 内容
+    pending_images_map = {}
+    pending_voices_map = {}
     has_multimodal = False
-    
-    # 构建 Multimodal Content Blocks (严格按时间顺序)
-    multimodal_content = []
-    
-    # 只要检测到由 lazy_sender 触发的聚合 (context.args check is not reliable here, rely on tail_msgs scanning)
-    # 我们遍历 tail_msgs，只要发现任何 pending 媒体，就开启多模态模式
-    
-    # 预扫描以决定 system prompt mode
     for msg in tail_msgs:
         if "[Image: Processing...]" in msg.content or "[Voice: Processing...]" in msg.content:
             has_multimodal = True
             break
 
     if has_multimodal:
-        logger.info(f"Multimodal Batch Triggered. Processing {len(tail_msgs)} tail messages chronologically.")
+        logger.info(f"Multimodal Batch Triggered. Processing {len(tail_msgs)} tail messages.")
+        multimodal_content = []
         
         for msg in tail_msgs:
-            if msg.role != 'user': 
-                continue
-                
-            content_marker = msg.content
-            
-            # Case A: Image
-            if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in content_marker:
+            # 格式化时间戳
+            time_str = "Unknown"
+            if msg.timestamp:
                 try:
-                    # Download & Process
+                    dt = msg.timestamp.replace(tzinfo=pytz.UTC) if msg.timestamp.tzinfo is None else msg.timestamp
+                    time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+                except: pass
+            
+            msg_id_str = f"MSG {msg.message_id}" if msg.message_id else "MSG ?"
+            prefix = f"[{msg_id_str}] [{time_str}] "
+
+            if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in msg.content:
+                try:
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
                     b64 = await media_service.process_image_to_base64(bytes(b))
-                    
                     if b64:
-                        # Append Interleaved Blocks
-                        multimodal_content.append({
-                            "type": "text",
-                            "text": f"Image [MSG {msg.message_id}]:"
-                        })
-                        multimodal_content.append({
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{b64}"
-                            }
-                        })
+                        multimodal_content.append({"type": "text", "text": f"{prefix}[Image]"})
+                        multimodal_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                         pending_images_map[msg.message_id] = msg
                 except Exception as e:
-                    logger.error(f"Image DL failed for MSG {msg.message_id}: {e}")
-                    multimodal_content.append({"type": "text", "text": f"[Image Download Failed for MSG {msg.message_id}]"})
-
-            # Case B: Voice
-            elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in content_marker:
+                    logger.error(f"Image DL failed: {e}")
+                    multimodal_content.append({"type": "text", "text": f"{prefix}[Image Download Failed]"})
+            
+            elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in msg.content:
                 try:
-                    # Download & Process
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
                     b64 = await media_service.process_audio_to_base64(bytes(b))
-                    
                     if b64:
-                        # Append Interleaved Blocks
-                        multimodal_content.append({
-                            "type": "text",
-                            "text": f"Voice [MSG {msg.message_id}]:"
-                        })
-                        multimodal_content.append({
-                            "type": "input_audio",
-                            "input_audio": {
-                                "data": b64,
-                                "format": "wav"
-                            }
-                        })
+                        multimodal_content.append({"type": "text", "text": f"{prefix}[Voice]"})
+                        multimodal_content.append({"type": "input_audio", "input_audio": {"data": b64, "format": "wav"}})
                         pending_voices_map[msg.message_id] = msg
                 except Exception as e:
-                    logger.error(f"Voice DL failed for MSG {msg.message_id}: {e}")
-                    multimodal_content.append({"type": "text", "text": f"[Voice Download Failed for MSG {msg.message_id}]"})
+                    logger.error(f"Voice DL failed: {e}")
+                    multimodal_content.append({"type": "text", "text": f"{prefix}[Voice Download Failed]"})
             
-            # Case C: Text
             else:
-                 # 纯文本消息 (可能是之前的文本，或者是混合在中间的文本)
-                 # 过滤掉非 pending 的占位符? 不，只有 "[Image: Processing...]" 是我们要替换的。
-                 # 如果用户发了文字 "Look at this"，这里直接作为 text block
-                 text_content = msg.content
-                 if text_content:
-                     multimodal_content.append({
-                         "type": "text",
-                         "text": text_content
-                     })
+                if msg.content:
+                    text_content = msg.content
+                    if msg.reply_to_content:
+                        prefix += f'(Reply to "{msg.reply_to_content}") '
+                    multimodal_content.append({"type": "text", "text": prefix + text_content})
 
-        # Final Payload Assignment
-        # append a final instructions prompt if needed? 
-        # The system prompt handles the protocol.
-        # Maybe add a small footer to ensure LLM knows context ended?
-        if not multimodal_content:
-             multimodal_content.append({"type": "text", "text": "Please process the updated context."})
-             
-        # Add "Please process..." trigger if the last item wasn't an explicit instruction?
-        # Better to just let the system prompt drive it.
-        
-        messages.append({"role": "user", "content": multimodal_content})
-
-
+        if multimodal_content:
+            messages.append({"role": "user", "content": multimodal_content})
+    else:
         # 普通文本模式：直接追加
         for h in tail_msgs:
-            # 同样格式化
             time_str = "Unknown"
             if h.timestamp:
-                 try:
+                try:
                     dt = h.timestamp.replace(tzinfo=pytz.UTC) if h.timestamp.tzinfo is None else h.timestamp
                     time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
-                 except: pass
+                except: pass
+            
             msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
             prefix = f"[{msg_id_str}] [{time_str}] "
             if h.reply_to_content:

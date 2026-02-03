@@ -113,7 +113,8 @@ class SummaryService:
             
             # 这里的顺序是 desc
             for msg in all_msgs:
-                msg_text = f"{msg.role}: {msg.content}\n"
+                # 估算包含前缀的消息长度
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] {msg.role}: {msg.content}\n"
                 t = history_service.count_tokens(msg_text)
                 if curr_tokens + t > T and curr_tokens > 0:
                     break
@@ -129,9 +130,25 @@ class SummaryService:
                 logger.info(f"Summary Check for {chat_id}: Buffer is empty (All messages are in Active Window).")
                 return
 
+            # 获取时区配置
+            timezone = configs.get("timezone", "UTC")
+            import pytz
+            try:
+                tz = pytz.timezone(timezone)
+            except:
+                tz = pytz.UTC
+
             text_buffer = ""
             for msg in buffer_msgs:
-                text_buffer += f"{msg.role}: {msg.content}\n"
+                time_str = "Unknown"
+                if msg.timestamp:
+                    try:
+                        dt = msg.timestamp.replace(tzinfo=pytz.UTC) if msg.timestamp.tzinfo is None else msg.timestamp
+                        time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+                    except: pass
+                
+                msg_id_str = f"MSG {msg.message_id}" if msg.message_id else "MSG ?"
+                text_buffer += f"[{msg_id_str}] [{time_str}] {msg.role}: {msg.content}\n"
             
             buffer_tokens = history_service.count_tokens(text_buffer)
             
