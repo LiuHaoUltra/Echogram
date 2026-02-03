@@ -17,6 +17,15 @@ class HistoryService:
         if not text: return 0
         return len(self._encoding.encode(text))
 
+    def _truncate_content(self, text: str, limit: int) -> str:
+        """物理截断：保留头尾，中间替换"""
+        if not text or len(text) < limit:
+            return text
+        
+        # 保留头尾各 30% 的字符长度
+        keep = int(limit * 0.3)
+        return f"{text[:keep]}\n\n[... Content Truncated due to safety limit ({len(text)} chars) ...]\n\n{text[-keep:]}"
+
     async def clear_history(self, chat_id: int):
         """清空指定会话的记忆"""
         async for session in get_db_session():
@@ -67,14 +76,23 @@ class HistoryService:
             current_tokens = 0
 
             # 贪婪填充
-            for msg in candidates:
-                # 估算包含前缀的消息长度 (需包含 [ID] [Time] [Type] 以对齐最新格式)
-                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {msg.content}\n"
+            # 定义单条消息物理截断阈值 (防止恶意刷 Token)
+            hard_limit = int(target_tokens * 1.5)
+            
+            for i, msg in enumerate(candidates):
+                # 预处理：物理截取单条极长消息
+                content = self._truncate_content(msg.content, hard_limit)
+
+                # 估算包含前缀的消息长度
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {content}\n"
                 cost = self.count_tokens(msg_text)
                 
-                if current_tokens + cost > target_tokens:
-                    break # 满了，停止
+                # 兜底：即使第一条消息就爆了预算，也强行包含它，否则 AI 无法感知当前输入
+                if i > 0 and current_tokens + cost > target_tokens:
+                    break # 满了，且不是第一条，停止
                 
+                # 更新对象内容以便后续使用 (非持久化更新)
+                msg.content = content
                 selected.append(msg)
                 current_tokens += cost
 
@@ -91,12 +109,14 @@ class HistoryService:
             result = await session.execute(stmt)
             candidates = result.scalars().all()
 
-            current_tokens = 0
-            for msg in candidates:
+            current_tokens = 0 # Initialize current_tokens
+            hard_limit = int(target_tokens * 1.5)
+            for i, msg in enumerate(candidates):
+                content = self._truncate_content(msg.content, hard_limit)
                 # 同步估算模型
-                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {msg.content}\n"
+                msg_text = f"[{'MSG ID'}] [{'YYYY-MM-DD HH:MM:SS'}] [{msg.message_type or 'Text'}] {msg.role}: {content}\n"
                 cost = self.count_tokens(msg_text)
-                if current_tokens + cost > target_tokens:
+                if i > 0 and current_tokens + cost > target_tokens:
                     break
                 current_tokens += cost
             

@@ -11,8 +11,7 @@ class PromptBuilder:
 
 ## 1. 基础交互原则
 - **极致简洁**：在能表达清楚情感和意思的前提下，回复越短越好。
-- **口语化输出**：完全模拟即时通讯软件（IM）的聊天风格。允许使用不完整的句子、口语词。
-- **拒绝AI味**：严禁使用"也就是"、"换句话说"、"总而言之"等说教式连接词。
+- **禁绝 Emoji**：严禁在 `<chat>` 标签的正文内容中使用任何 Emoji 表情符号。这会产生严重的“AI味”，必须完全杜绝。
 - **风格执行权重 [最高优先级]**：必须严格遵循下文 [人格设定 (Soul)] 中定义的所有语言风格、标点符号习惯。
 
 ## 2. 记忆调用守则 (隐式记忆)
@@ -37,8 +36,10 @@ class PromptBuilder:
 """
 
     # 气泡控制：连贯性 (用于语音回复模式，优化 TTS)
-    BUBBLE_COHESIVE = """## (1) 响应结构：连贯气泡 (Cohesive Bubbles)
-- **合并逻辑**：严禁发送多个音频。你必须将所有的回复内容、转折、动作描写，全部合并在**同一个** `<chat>` 标签内。
+    BUBBLE_COHESIVE = """## (1) 响应结构：连贯即时 (Coherent Bubbles)
+- **按需分段**：虽然是语音模式，但你不需要死板地合并所有内容。为了模拟真实的追发习惯，你可以发送 1-3 个气泡。
+- **内容密度**：严禁发送过短（少于 3 字）的单个气泡，如果需要发送此类消息，不得单独拆分，必须合并到其他气泡中。
+- **上限约束**：严禁超过 3 个 `<chat>` 标签。
 """
 
     # 多模态标签指令 (Backfill 需求)
@@ -55,7 +56,9 @@ class PromptBuilder:
     TAG_ATTRIBUTES = """## (3) 标签属性 (Attributes)
 - **reply="ID"**：引用并回复特定消息。
 - **react="EMOJI"**：表情回应。
-  - **唯一性原则**：通常一轮对话你只需要回复一个 React。如果你发送了多个气泡，请仅在其中最合适的一个气泡中添加 `react`。
+  - **极低频率**：原则上，非必要不要使用，除非你想表达强烈的感情。严禁滥用。
+  - **白名单限制**：仅允许使用：👍, ❤️, 🔥, 🥰, 🤔, 🤣, 😡, 🫡, 👀, 🌚, 😭, 💩, 🤝。禁止使用任何其他符号。
+  - **唯一性原则**：除非用户明确要求，否则通常情况下，一轮对话你最多只能为一到两个气泡添加 `react`。
 """
 
     # 通用约束 (Constraints)
@@ -113,8 +116,14 @@ class PromptBuilder:
         # 5. Constraints
         constraints = cls.CONSTRAINTS_TEMPLATE
         
+        # 6. Mode Indicator (尾部注入，利用 Recency Bias 压制历史偏置)
+        if has_voice:
+            mode_indicator = "\n\n# 当前任务模式：语音回复 (Voice Response)\n> [IMPORTANT] 模式要求：允许使用 1-3 个 <chat> 标签。模拟真实追发节奏，保持内容密度。"
+        else:
+            mode_indicator = "\n\n# 当前任务模式：文字聊天 (Text Chat)\n> [IMPORTANT] 模式要求：推荐 1-5 个短语气泡。模仿 IM 连发频率。"
+
         # 最终组装
-        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}"
+        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{mode_indicator}"
 
 
     @classmethod
