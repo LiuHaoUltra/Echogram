@@ -148,7 +148,8 @@ class SummaryService:
                     except: pass
                 
                 msg_id_str = f"MSG {msg.message_id}" if msg.message_id else "MSG ?"
-                text_buffer += f"[{msg_id_str}] [{time_str}] {msg.role}: {msg.content}\n"
+                msg_type_str = msg.message_type.capitalize() if msg.message_type else "Text"
+                text_buffer += f"[{msg_id_str}] [{time_str}] [{msg_type_str}] {msg.role}: {msg.content}\n"
             
             buffer_tokens = history_service.count_tokens(text_buffer)
             

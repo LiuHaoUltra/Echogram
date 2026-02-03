@@ -205,7 +205,8 @@ class MediaService:
                 
                 msg_id = h_obj.get('message_id')
                 msg_id_str = f"MSG {msg_id}" if msg_id else "MSG ?"
-                prefix = f"[{msg_id_str}] [{time_str}] "
+                msg_type_str = h_obj.get('message_type', 'Text').capitalize()
+                prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
                 
                 formatted_history.append({
                     "role": h_obj["role"],

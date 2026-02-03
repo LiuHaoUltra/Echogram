@@ -258,7 +258,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         
         msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
-        prefix = f"[{msg_id_str}] [{time_str}] "
+        msg_type_str = h.message_type.capitalize() if h.message_type else "Text"
+        prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
         if h.reply_to_content:
             prefix += f'(Reply to "{h.reply_to_content}") '
         messages.append({"role": h.role, "content": prefix + h.content})
@@ -286,7 +287,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 except: pass
             
             msg_id_str = f"MSG {msg.message_id}" if msg.message_id else "MSG ?"
-            prefix = f"[{msg_id_str}] [{time_str}] "
+            msg_type_str = msg.message_type.capitalize() if msg.message_type else "Text"
+            prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
 
             if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in msg.content:
                 try:
@@ -334,7 +336,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 except: pass
             
             msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
-            prefix = f"[{msg_id_str}] [{time_str}] "
+            msg_type_str = h.message_type.capitalize() if h.message_type else "Text"
+            prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
             if h.reply_to_content:
                 prefix += f'(Reply to "{h.reply_to_content}") '
             messages.append({"role": h.role, "content": prefix + h.content})

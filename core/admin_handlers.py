@@ -204,7 +204,8 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 time_str = "Unknown"
             
             msg_id_str = f"MSG {m.message_id}" if m.message_id else "MSG ?"
-            prefix = f"[{msg_id_str}] [{time_str}] "
+            msg_type_str = m.message_type.capitalize() if m.message_type else "Text"
+            prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
             
             content_snippet = m.content[:200] + ('...' if len(m.content) > 200 else '')
             dynamic_preview += f"{prefix}[{m.role.upper()}]: {content_snippet}\n"
