@@ -242,7 +242,6 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
     has_rv = False
     if last_assistant_idx != -1:
         last_assistant_msg = history_msgs[last_assistant_idx]
-        from core.sender_service import sender_service
         # 解析标签中的 react 属性
         react_matches = re.finditer(r'react=["\']([^"\']+)["\']', last_assistant_msg.content)
         for rm in react_matches:
