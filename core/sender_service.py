@@ -42,7 +42,6 @@ class SenderService:
         matches = list(re.finditer(tag_pattern, reply_content, flags=re.DOTALL))
         
         reply_blocks = []
-        cleaned_history_parts = []
 
         if not matches:
             # 兜底处理无标签情况
@@ -99,67 +98,75 @@ class SenderService:
                 await self._handle_reaction(chat_id, target_react_emoji, target_reply_id, history_msgs, context)
 
             # 处理消息发送
+
+            # 处理消息发送
+            sent_msg_id = None
             if not content or content == "...":
-                continue
-
-            # 拟人化延迟 (文字模式显示 Typing，语音模式显示 Record Voice)
-            if i > 0:
-                await asyncio.sleep(1.0)
-            
-            if message_type == 'voice' and await media_service.is_tts_configured():
-                # --- 语音模式发送 ---
-                # 清洗文本 (移除所有 XML 标签，防止 TTS 读出标签)
-                clean_text = re.sub(r'<[^>]+>', '', content).strip()
-                if not clean_text: continue
-
-                # 拟人化时长 (根据文字长度模拟录音时间)
-                rec_duration = min(len(clean_text) * 0.2, 5.0)
-                await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
-                await asyncio.sleep(rec_duration)
-
-                try:
-                    voice_bytes = await media_service.text_to_speech(clean_text)
-                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
-                    
-                    import time
-                    sent_msg = await context.bot.send_voice(
-                        chat_id=chat_id,
-                        voice=voice_bytes,
-                        filename=f"voice_{int(time.time())}_{i}.ogg",
-                        reply_to_message_id=target_reply_id
-                    )
-                    last_sent_msg_id = sent_msg.message_id
-                except Exception as e:
-                    logger.error(f"SenderService: TTS Failed, falling back to text: {e}")
-                    sent_msg = await context.bot.send_message(chat_id=chat_id, text=clean_text, reply_to_message_id=target_reply_id)
-                    last_sent_msg_id = sent_msg.message_id
+                # 依然需要记录空块吗？通常 ... 只是思考占位，且被过滤了。
+                # 但如果是纯表情回应的块，content可能是None或empty?
+                # 上听逻辑: if content or react_emoji: reply_blocks.append...
+                # Block definition: "content": content if content else "..."
+                # So content is "..." if empty.
+                pass
             else:
-                # --- 文字模式发送 ---
-                typing_duration = min(len(content) * 0.15, 3.0)
-                await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
-                await asyncio.sleep(typing_duration)
+                 # 拟人化延迟 (文字模式显示 Typing，语音模式显示 Record Voice)
+                if i > 0:
+                    await asyncio.sleep(1.0)
+                
+                sent_msg = None
+                if message_type == 'voice' and await media_service.is_tts_configured():
+                    # --- 语音模式发送 ---
+                    # 清洗文本 (移除所有 XML 标签，防止 TTS 读出标签)
+                    clean_text = re.sub(r'<[^>]+>', '', content).strip()
+                    if clean_text:
+                        # 拟人化时长 (根据文字长度模拟录音时间)
+                        rec_duration = min(len(clean_text) * 0.2, 5.0)
+                        await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.RECORD_VOICE)
+                        await asyncio.sleep(rec_duration)
 
-                try:
-                    sent_msg = await context.bot.send_message(
-                        chat_id=chat_id, 
-                        text=content, 
-                        reply_to_message_id=target_reply_id
-                    )
-                    last_sent_msg_id = sent_msg.message_id
-                except Exception as e:
-                    logger.warning(f"SenderService: Failed to send part {i} to {chat_id}: {e}")
-                    if target_reply_id: # 降级不带引用重试
                         try:
-                            sent_msg = await context.bot.send_message(chat_id=chat_id, text=content)
-                            last_sent_msg_id = sent_msg.message_id
-                        except: pass
-        
-        # 3. 记录历史
-        await history_service.add_message(
-            chat_id, "assistant", cleaned_reply_content, 
-            message_id=last_sent_msg_id,
-            message_type=message_type
-        )
+                            voice_bytes = await media_service.text_to_speech(clean_text)
+                            await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.UPLOAD_VOICE)
+                            
+                            import time
+                            sent_msg = await context.bot.send_voice(
+                                chat_id=chat_id,
+                                voice=voice_bytes,
+                                filename=f"voice_{int(time.time())}_{i}.ogg",
+                                reply_to_message_id=target_reply_id
+                            )
+                        except Exception as e:
+                            logger.error(f"SenderService: TTS Failed, falling back to text: {e}")
+                            sent_msg = await context.bot.send_message(chat_id=chat_id, text=clean_text, reply_to_message_id=target_reply_id)
+                else:
+                    # --- 文字模式发送 ---
+                    typing_duration = min(len(content) * 0.15, 3.0)
+                    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+                    await asyncio.sleep(typing_duration)
+
+                    try:
+                        sent_msg = await context.bot.send_message(
+                            chat_id=chat_id, 
+                            text=content, 
+                            reply_to_message_id=target_reply_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"SenderService: Failed to send part {i} to {chat_id}: {e}")
+                        if target_reply_id: # 降级不带引用重试
+                            try:
+                                sent_msg = await context.bot.send_message(chat_id=chat_id, text=content)
+                            except: pass
+                
+                if sent_msg:
+                    sent_msg_id = sent_msg.message_id
+            
+            # 3. 实时记录历史 (Split Storage)
+            # 即使发送失败(sent_msg_id=None)，也记录内容以保证背景连贯性
+            await history_service.add_message(
+                chat_id, "assistant", block["xml_part"],
+                message_id=sent_msg_id,
+                message_type=message_type
+            )
         
         # 4. 触发总结检查
         try:
