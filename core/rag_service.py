@@ -180,30 +180,31 @@ class RagService:
                 
                 # 5. [DEBUG] 通知超级管理员
                 try:
-                    from core.bot import bot
-                    debug_msg = (
-                        f"🔮 <b>RAG Debug: Embedding Sync</b>\n"
-                        f"━━━━━━━━━━━━━━━\n"
-                        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                        f"<b>Count:</b> <code>{len(items_to_embed)}</code>\n"
-                        f"━━━━━━━━━━━━━━━\n\n"
-                        f"<b>Materials (Final Payload):</b>\n"
-                    )
-                    
-                    # 拼接清洗后的内容
-                    payload_text = "\n\n".join([f"• {html.escape(t)}" for t in items_to_embed])
-                    
-                    # 避免消息过长导致发送失败
-                    if len(payload_text) > 3500:
-                        payload_text = payload_text[:3500] + "\n\n... (Content truncated due to length)"
-                    
-                    debug_msg += f"<pre>{payload_text}</pre>"
-                    
-                    await bot.send_message(
-                        chat_id=settings.ADMIN_USER_ID,
-                        text=debug_msg,
-                        parse_mode='HTML'
-                    )
+                    import core.bot as bot_module
+                    if bot_module.bot:
+                        debug_msg = (
+                            f"🔮 <b>RAG Debug: Embedding Sync</b>\n"
+                            f"━━━━━━━━━━━━━━━\n"
+                            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                            f"<b>Count:</b> <code>{len(items_to_embed)}</code>\n"
+                            f"━━━━━━━━━━━━━━━\n\n"
+                            f"<b>Materials (Final Payload):</b>\n"
+                        )
+                        
+                        # 拼接清洗后的内容
+                        payload_text = "\n\n".join([f"• {html.escape(t)}" for t in items_to_embed])
+                        
+                        # 避免消息过长导致发送失败
+                        if len(payload_text) > 3500:
+                            payload_text = payload_text[:3500] + "\n\n... (Content truncated due to length)"
+                        
+                        debug_msg += f"<pre>{payload_text}</pre>"
+                        
+                        await bot_module.bot.send_message(
+                            chat_id=settings.ADMIN_USER_ID,
+                            text=debug_msg,
+                            parse_mode='HTML'
+                        )
                 except Exception as notify_err:
                     logger.warning(f"RAG Debug Notification failed: {notify_err}")
 
@@ -329,28 +330,29 @@ class RagService:
 
                 # [DEBUG] 通知超级管理员检索结果
                 try:
-                    from core.bot import bot
-                    debug_msg = (
-                        f"🔍 <b>RAG Debug: Search Result</b>\n"
-                        f"━━━━━━━━━━━━━━━\n"
-                        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                        f"<b>Query:</b> <code>{html.escape(query_text)}</code>\n"
-                        f"━━━━━━━━━━━━━━━\n\n"
-                        f"<b>Matched Context:</b>\n"
-                    )
-                    
-                    # 避免消息过长
-                    safe_context = html.escape(result_context)
-                    if len(safe_context) > 3500:
-                        safe_context = safe_context[:3500] + "\n\n... (Result truncated)"
+                    import core.bot as bot_module
+                    if bot_module.bot:
+                        debug_msg = (
+                            f"🔍 <b>RAG Debug: Search Result</b>\n"
+                            f"━━━━━━━━━━━━━━━\n"
+                            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                            f"<b>Query:</b> <code>{html.escape(query_text)}</code>\n"
+                            f"━━━━━━━━━━━━━━━\n\n"
+                            f"<b>Matched Context:</b>\n"
+                        )
                         
-                    debug_msg += f"<pre>{safe_context}</pre>"
-                    
-                    await bot.send_message(
-                        chat_id=settings.ADMIN_USER_ID,
-                        text=debug_msg,
-                        parse_mode='HTML'
-                    )
+                        # 避免消息过长
+                        safe_context = html.escape(result_context)
+                        if len(safe_context) > 3500:
+                            safe_context = safe_context[:3500] + "\n\n... (Result truncated)"
+                            
+                        debug_msg += f"<pre>{safe_context}</pre>"
+                        
+                        await bot_module.bot.send_message(
+                            chat_id=settings.ADMIN_USER_ID,
+                            text=debug_msg,
+                            parse_mode='HTML'
+                        )
                 except Exception as notify_err:
                     logger.warning(f"RAG Search Debug Notification failed: {notify_err}")
 

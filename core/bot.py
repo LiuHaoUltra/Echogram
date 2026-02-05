@@ -6,6 +6,9 @@ from utils.logger import logger
 import models 
 from core.news_push_service import news_push_service
 
+# 全局 Bot 实例，供服务层（如 RAG）在无 Context 场景下使用
+bot = None
+
 async def post_init(application: Application):
     """
     Bot 初始化
@@ -14,6 +17,10 @@ async def post_init(application: Application):
     """
     logger.info("Initializing database...")
     await init_db()
+    
+    global bot
+    bot = application.bot
+    
     logger.info("Database initialized successfully.")
     
     # --- Schema Patch (Fix for message_type missing) ---
