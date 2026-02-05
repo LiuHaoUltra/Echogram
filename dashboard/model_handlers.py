@@ -1,6 +1,6 @@
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
-from core.llm_utils import fetch_available_models
+from core.llm_utils import fetch_available_models, fetch_embedding_models
 from core.config_service import config_service
 from dashboard.keyboards import (
     get_main_menu_keyboard, 
@@ -28,23 +28,39 @@ async def show_model_selection_panel(update: Update, context: ContextTypes.DEFAU
     # 保存选择目标
     context.user_data['model_selection_target'] = target
     
-    # 1. 确保模型数据已加载
+    # 1. 确定所需模型类型 & 缓存校验
+    needed_type = 'vector' if target == 'vector' else 'chat'
+    cached_type = context.user_data.get('cached_model_type')
+
+    # 如果缓存类型不匹配，强制清除旧缓存
+    if cached_type != needed_type:
+        _model_cache.pop(user_id, None)
+
     if user_id not in _model_cache:
         status_msg = None
         loading_text = "🔄 正在从供应商获取模型列表，请稍候..."
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(loading_text)
+            try:
+                await update.callback_query.edit_message_text(loading_text)
+            except: pass # Ignore if message not modified
         else:
             status_msg = await update.message.reply_text(loading_text)
 
-        success, result = await fetch_available_models()
+        # 根据类型调用不同 Fetcher
+        if needed_type == 'vector':
+            success, result = await fetch_embedding_models()
+        else:
+            success, result = await fetch_available_models()
         
         if success:
             _model_cache[user_id] = result
+            context.user_data['cached_model_type'] = needed_type
         else:
             # 失败处理
             _model_cache.pop(user_id, None)
+            context.user_data.pop('cached_model_type', None)
+            
             text = f"⚠️ 无法获取模型列表: {result}\n\n请直接手动输入模型名称:"
             if update.callback_query:
                 await update.callback_query.edit_message_text(text, parse_mode="HTML")
