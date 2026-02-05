@@ -535,6 +535,7 @@ class RagService:
                     FROM history h
                     LEFT JOIN history_vec v ON h.id = v.rowid
                     WHERE h.chat_id = :chat_id
+                      AND h.role = 'assistant'
                       AND h.content IS NOT NULL
                       AND h.content != ''
                       AND h.content NOT LIKE '[%: Processing...]'
