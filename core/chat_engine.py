@@ -253,12 +253,12 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # --- RAG Search ---
         # 移到锁内执行，确保使用最新的 embeddings
         try:
-            current_query = ""
-            for m in reversed(tail_msgs):
-                # 寻找最近一条且不是占位符的 User Message
-                if m.role == 'user' and m.content and not m.content.startswith("["):
-                     current_query = m.content
-                     break
+            # 聚合当前轮次中所有的用户文本消息作为查询词
+            user_texts = [
+                m.content for m in tail_msgs 
+                if m.role == 'user' and m.content and not m.content.startswith("[")
+            ]
+            current_query = " ".join(user_texts).strip()
             
             if current_query:
                 # 收集当前上下文中的所有消息 ID 以排除 (Self-Echo Prevention)

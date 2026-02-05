@@ -235,7 +235,8 @@ class RagService:
         :param exclude_ids: 需要排除的消息 ID 列表 (避免自引用)
         """
         sanitized_query = self.sanitize_content(query_text)
-        if len(sanitized_query) < 3:
+        # 对于中文，2个字就有语义了，降低限制
+        if len(sanitized_query) < 2:
             return ""
 
         # 使用默认或传入的 top_k (如果传入为 None/0 则用默认)
@@ -247,6 +248,26 @@ class RagService:
             if val := configs.get("rag_similarity_threshold"):
                 threshold = float(val)
         except: pass
+
+        # [DEBUG] 通知超级管理员：开始检索
+        try:
+            import core.bot as bot_module
+            if bot_module.bot:
+                start_msg = (
+                    f"🔍 <b>RAG Debug: Search Attempt</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                    f"<b>Query:</b> <code>{html.escape(sanitized_query)}</code>\n"
+                    f"<b>Threshold:</b> <code>{threshold}</code>\n"
+                    f"━━━━━━━━━━━━━━━"
+                )
+                await bot_module.bot.send_message(
+                    chat_id=settings.ADMIN_USER_ID,
+                    text=start_msg,
+                    parse_mode='HTML'
+                )
+        except Exception as notify_err:
+            logger.warning(f"RAG Search Start Notification failed: {notify_err}")
 
         # 构建 ID 排除条件
         exclusion_clause = ""
@@ -273,13 +294,6 @@ class RagService:
             params["query_vec"] = json.dumps(query_vec)
 
             # 2. 向量检索 + JOIN
-            # 注意: vec_distance_cosine 越小越相似 (1 - cosine_similarity) ?
-            # sqlite-vec 中 cosine_distance = 1.0 - cosine_similarity
-            # 我们的阈值 0.6 原意可能是相似度 > 0.6 还是距离 < 0.6?
-            # 原代码 distance < 0.6，意味着相似度 > 0.4，这是一个很宽泛的筛选。
-            # 通常 embedding-3-small 的距离在 0.3-0.8 之间。
-            # 假设原意是保留距离小于 0.6 的 (相似度 > 0.4)
-            
             sql = f"""
                 SELECT 
                     h.role,
@@ -307,6 +321,16 @@ class RagService:
                 rows = result.fetchall()
                 
                 if not rows:
+                    # [DEBUG] 通知无匹配
+                    try:
+                        import core.bot as bot_module
+                        if bot_module.bot:
+                            await bot_module.bot.send_message(
+                                chat_id=settings.ADMIN_USER_ID,
+                                text=f"🔍 <b>RAG Debug: No Match</b>\nChat: <code>{chat_id}</code>",
+                                parse_mode='HTML'
+                            )
+                    except: pass
                     return ""
                 
                 # 3. 格式化结果
@@ -324,30 +348,21 @@ class RagService:
                              # 假设是字符串，取前10位 (YYYY-MM-DD)
                              date_str = str(row.timestamp)[:10]
 
-                    context_lines.append(f"[{date_str}] {row.role.capitalize()}: {content}")
+                    context_lines.append(f"[{date_str}] {row.role.capitalize()}: {content} (dist: {row.distance:.3f})")
                 
                 result_context = "\n".join(context_lines)
 
-                # [DEBUG] 通知超级管理员检索结果
+                # [DEBUG] 通知超级管理员检索结果 (最终命中)
                 try:
                     import core.bot as bot_module
                     if bot_module.bot:
                         debug_msg = (
-                            f"🔍 <b>RAG Debug: Search Result</b>\n"
+                            f"✅ <b>RAG Debug: Found Matches</b>\n"
                             f"━━━━━━━━━━━━━━━\n"
                             f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                            f"<b>Query:</b> <code>{html.escape(query_text)}</code>\n"
                             f"━━━━━━━━━━━━━━━\n\n"
-                            f"<b>Matched Context:</b>\n"
+                            f"<pre>{html.escape(result_context)}</pre>"
                         )
-                        
-                        # 避免消息过长
-                        safe_context = html.escape(result_context)
-                        if len(safe_context) > 3500:
-                            safe_context = safe_context[:3500] + "\n\n... (Result truncated)"
-                            
-                        debug_msg += f"<pre>{safe_context}</pre>"
-                        
                         await bot_module.bot.send_message(
                             chat_id=settings.ADMIN_USER_ID,
                             text=debug_msg,
