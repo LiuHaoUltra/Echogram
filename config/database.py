@@ -50,9 +50,9 @@ def load_extensions(dbapi_conn, conn_record):
             real_conn.enable_load_extension(True)
             sqlite_vec.load(real_conn)
             real_conn.enable_load_extension(False)
-        else:
-            import sys
-            sys.stderr.write(f"⚠️ [Pool] Connection {type(real_conn)} has no enable_load_extension\n")
+        # else:
+        #     Silent failure for non-standard connections to avoid spam
+        #     pass
             
     except Exception as e:
         import sys
@@ -79,7 +79,7 @@ def _load_vec_sync(conn):
             real_conn.enable_load_extension(True)
             sqlite_vec.load(real_conn)
             real_conn.enable_load_extension(False)
-            sys.stderr.write(f"✅ sqlite-vec loaded successfully in sync context.\n")
+            # Success: silent
         else:
             sys.stderr.write(f"⚠️ [Sync] Connection {type(real_conn)} lacks enable_load_extension.\n")
             
