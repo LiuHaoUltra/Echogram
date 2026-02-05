@@ -95,11 +95,16 @@ class RagService:
             configs = await config_service.get_all_settings()
             model_name = configs.get("vector_model_name", "text-embedding-3-small")
             
-            # 使用 text-embedding-3-small
-            resp = await client.embeddings.create(
-                input=texts,
-                model=model_name
-            )
+            # 限制维度为 1536 以适配 sqlite-vec 表结构
+            # text-embedding-3 系列模型支持通过 dimensions 参数指定返回维度
+            kwargs = {
+                "input": texts,
+                "model": model_name
+            }
+            if "text-embedding-3" in model_name:
+                kwargs["dimensions"] = 1536
+
+            resp = await client.embeddings.create(**kwargs)
             return [data.embedding for data in resp.data]
         except Exception as e:
             logger.error(f"Embedding API failed: {e}")

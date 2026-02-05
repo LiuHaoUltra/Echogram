@@ -45,8 +45,9 @@ class SenderService:
 
         if not matches:
             # 兜底处理无标签情况
-            reply_blocks.append({"content": reply_content.strip(), "reply": None, "react": None})
-            cleaned_history_parts.append(f"<chat>{reply_content.strip()}</chat>")
+            content = reply_content.strip()
+            xml = f"<chat>{content}</chat>"
+            reply_blocks.append({"content": content, "reply": None, "react": None, "xml_part": xml})
         else:
             for m in matches:
                 attrs_raw = m.group("attrs")
@@ -75,19 +76,17 @@ class SenderService:
                 attr_str = ""
                 if reply_id: attr_str += f' reply="{reply_id}"'
                 if valid_react_for_history: attr_str += f' react="{valid_react_for_history}"'
-                cleaned_history_parts.append(f"<chat{attr_str}>{content}</chat>")
+                cleaned_xml = f"<chat{attr_str}>{content}</chat>"
 
                 if content or react_emoji:
                     reply_blocks.append({
                         "content": content if content else "...",
                         "reply": reply_id,
-                        "react": react_emoji
+                        "react": react_emoji,
+                        "xml_part": cleaned_xml
                     })
 
-        cleaned_reply_content = "\n".join(cleaned_history_parts)
-
         # 2. 依次发送块
-        last_sent_msg_id = None
         for i, block in enumerate(reply_blocks):
             content = block["content"]
             target_reply_id = block["reply"]
@@ -97,17 +96,14 @@ class SenderService:
             if target_react_emoji:
                 await self._handle_reaction(chat_id, target_react_emoji, target_reply_id, history_msgs, context)
 
-            # 处理消息发送
-
-            # 处理消息发送
+            # --- 处理发送与记录 ---
             sent_msg_id = None
+            
+            # 如果内容只是 "..." 或是空的（且没有表情），通常会被过滤，但这里做兜底
             if not content or content == "...":
-                # 依然需要记录空块吗？通常 ... 只是思考占位，且被过滤了。
-                # 但如果是纯表情回应的块，content可能是None或empty?
-                # 上听逻辑: if content or react_emoji: reply_blocks.append...
-                # Block definition: "content": content if content else "..."
-                # So content is "..." if empty.
-                pass
+                # 只在有表情时记录空块，否则彻底忽略
+                if not target_react_emoji:
+                    continue
             else:
                  # 拟人化延迟 (文字模式显示 Typing，语音模式显示 Record Voice)
                 if i > 0:
