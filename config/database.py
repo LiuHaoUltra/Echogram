@@ -14,18 +14,49 @@ engine = create_async_engine(
 
 # 监听连接池事件 (更为底层，确保能捕获)
 @event.listens_for(pool.Pool, "connect")
+def _get_std_connection(conn):
+    """
+    递归解包以获取原始的 sqlite3.Connection 对象
+    SQLAlchemy Adapter -> aiosqlite.Connection -> sqlite3.Connection
+    """
+    import sqlite3
+    
+    # 0. 已经是目标
+    if isinstance(conn, sqlite3.Connection):
+        return conn
+    
+    # 1. SQLAlchemy AsyncAdapt_aiosqlite_connection
+    if hasattr(conn, "_connection"):
+        # 递归调用，因为 _connection 可能是 aiosqlite.Connection
+        return _get_std_connection(conn._connection)
+        
+    # 2. aiosqlite.Connection
+    if hasattr(conn, "_conn"):
+        return _get_std_connection(conn._conn)
+        
+    # 3. Generic Driver Connection
+    if hasattr(conn, "driver_connection"):
+        return _get_std_connection(conn.driver_connection)
+        
+    return conn
+
+# 监听连接池事件 (更为底层，确保能捕获)
+@event.listens_for(pool.Pool, "connect")
 def load_extensions(dbapi_conn, conn_record):
-    if hasattr(dbapi_conn, "enable_load_extension"):
-        try:
-            dbapi_conn.enable_load_extension(True)
-            sqlite_vec.load(dbapi_conn)
-            dbapi_conn.enable_load_extension(False)
-        except Exception as e:
+    try:
+        real_conn = _get_std_connection(dbapi_conn)
+        
+        if hasattr(real_conn, "enable_load_extension"):
+            real_conn.enable_load_extension(True)
+            sqlite_vec.load(real_conn)
+            real_conn.enable_load_extension(False)
+        else:
             import sys
-            sys.stderr.write(f"❌ Error loading sqlite-vec extension: {e}\n")
-    else:
+            sys.stderr.write(f"⚠️ [Pool] Connection {type(real_conn)} has no enable_load_extension\n")
+            
+    except Exception as e:
         import sys
-        sys.stderr.write(f"⚠️ dbapi_conn {type(dbapi_conn)} does not have enable_load_extension\n")
+        sys.stderr.write(f"❌ [Pool] Error loading sqlite-vec extension: {e}\n")
 
 # 创建异步会话工厂
 AsyncSessionLocal = async_sessionmaker(
@@ -39,20 +70,22 @@ def _load_vec_sync(conn):
     """同步上下文中手动加载扩展 (用于 init_db)"""
     import sys
     try:
-        dbapi_conn = conn.connection.dbapi_connection
+        # conn 是 SQLAlchemy ConnectionWrapper
+        # conn.connection 是 Adapter
+        wrapper = conn.connection.dbapi_connection
+        real_conn = _get_std_connection(wrapper)
         
-        if hasattr(dbapi_conn, "enable_load_extension"):
-            dbapi_conn.enable_load_extension(True)
-            sqlite_vec.load(dbapi_conn)
-            dbapi_conn.enable_load_extension(False)
+        if hasattr(real_conn, "enable_load_extension"):
+            real_conn.enable_load_extension(True)
+            sqlite_vec.load(real_conn)
+            real_conn.enable_load_extension(False)
             sys.stderr.write(f"✅ sqlite-vec loaded successfully in sync context.\n")
         else:
-            sys.stderr.write(f"⚠️ dbapi_conn {type(dbapi_conn)} lacks enable_load_extension in sync context.\n")
+            sys.stderr.write(f"⚠️ [Sync] Connection {type(real_conn)} lacks enable_load_extension.\n")
             
     except Exception as e:
         sys.stderr.write(f"❌ Failed to load sqlite-vec extension in sync: {e}\n")
         # Explicit re-raise to crash early if RAG is essential
-        # or pass if we want to survive (but RAG will fail later)
         pass
 
 async def init_db():
