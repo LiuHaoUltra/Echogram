@@ -94,18 +94,16 @@ class RagService:
             client = await self._get_client()
             configs = await config_service.get_all_settings()
             model_name = configs.get("vector_model_name", "text-embedding-3-small")
-            
-            # 限制维度为 1536 以适配 sqlite-vec 表结构
-            # text-embedding-3 系列模型支持通过 dimensions 参数指定返回维度
-            kwargs = {
-                "input": texts,
-                "model": model_name
-            }
-            if "text-embedding-3" in model_name:
-                kwargs["dimensions"] = 1536
 
-            resp = await client.embeddings.create(**kwargs)
-            return [data.embedding for data in resp.data]
+            resp = await client.embeddings.create(
+                input=texts,
+                model=model_name
+            )
+            
+            # 强行截断到 1536 维
+            # 无论模型原生维度是多少，统一截断以适配 sqlite-vec 表结构。
+            # 对于支持 Matryoshka 的模型（如 OpenAI v3, Gemini），前 1536 维即为有效表征。
+            return [data.embedding[:1536] for data in resp.data]
         except Exception as e:
             logger.error(f"Embedding API failed: {e}")
             raise
