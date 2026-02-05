@@ -82,6 +82,7 @@ async def get_rag_settings_keyboard() -> InlineKeyboardMarkup:
     # 读取当前配置
     cooldown = await config_service.get_value("rag_sync_cooldown", "180")
     threshold = await config_service.get_value("rag_similarity_threshold", "0.6")
+    padding = await config_service.get_value("rag_context_padding", "3")
     
     keyboard = [
         # Values Row
@@ -90,6 +91,9 @@ async def get_rag_settings_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(f"🎯 相似度阈值: {threshold}", callback_data="trigger_set_rag_th"),
+        ],
+        [
+            InlineKeyboardButton(f"↔️ 拓展窗口: {padding}", callback_data="trigger_set_rag_padding"),
         ],
         [InlineKeyboardButton("🧨 Rebuild Index (Danger)", callback_data="trigger_rebuild_index")],
         [InlineKeyboardButton("🔙 返回设置", callback_data="menu_memory")]

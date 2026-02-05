@@ -399,7 +399,41 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         keyboard.append([InlineKeyboardButton("🔙 返回", callback_data="menu_agentic")])
         await query.edit_message_text(text="<b>📋 订阅源状态监控 & 管理:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         return ConversationHandler.END
+
+    if data == "trigger_set_rag_padding":
+        # 显示 Padding 选择菜单
+        keyboard = [
+            [
+                InlineKeyboardButton("1 (保守)", callback_data="rag_padding_set:1"),
+                InlineKeyboardButton("2 (紧凑)", callback_data="rag_padding_set:2"),
+                InlineKeyboardButton("3 (默认)", callback_data="rag_padding_set:3"),
+            ],
+            [
+                InlineKeyboardButton("5 (激进)", callback_data="rag_padding_set:5"),
+                InlineKeyboardButton("8 (超级)", callback_data="rag_padding_set:8"),
+            ],
+            [InlineKeyboardButton("🔙 返回", callback_data="menu_rag")]
+        ]
         
+        msg = (
+            "<b>↔️ 设置 RAG 拓展窗口 (Padding)</b>\n\n"
+            "这是指在命中关键回复后，向前/向后额外抓取的消息 **条数**。\n"
+            "• 默认 3：User(Pre1)+User(Pre2)+User(Pre3) ... Anchor ... User(Post...)\n"
+            "• 调大该值可防止上下文丢失，但会增加 Token 消耗。"
+        )
+        await query.edit_message_text(text=msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        return ConversationHandler.END
+        
+    if data.startswith("rag_padding_set:"):
+        val = data.split(":")[1]
+        await config_service.update_setting("rag_context_padding", val)
+        await query.answer(f"✅ RAG Padding 已设置为: {val}")
+        
+        # Return to menu
+        keyboard = await keyboards.get_rag_settings_keyboard()
+        await query.edit_message_text(text="<b>🔮 RAG 高级设置</b>", reply_markup=keyboard, parse_mode="HTML")
+        return ConversationHandler.END
+
     if data.startswith("manage_targets:"):
         from core.news_push_service import news_push_service
         from core.access_service import access_service

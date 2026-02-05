@@ -299,9 +299,20 @@ class RagService:
                 if "cannot" in rewritten or "sorry" in rewritten.lower():
                     return query_text
                     
-                # [DEBUG] 只有当发生实质变化时才打 Log
+                # [DEBUG] 只有当发生实质变化时才打 Log & 通知
                 if rewritten.lower() != query_text.lower():
                     logger.info(f"RAG Rewrite: '{query_text}' -> '{rewritten}'")
+                    try:
+                        import core.bot as bot_module
+                        if bot_module.bot:
+                            rewrite_msg = (
+                                f"🔄 <b>RAG Query Rewritten</b>\n"
+                                f"From: <code>{html.escape(query_text)}</code>\n"
+                                f"To: <code>{html.escape(rewritten)}</code>"
+                            )
+                            await bot_module.bot.send_message(settings.ADMIN_USER_ID, rewrite_msg, parse_mode='HTML')
+                    except Exception as notify_e:
+                        logger.error(f"Failed to send rewrite debug: {notify_e}")
                 
                 return rewritten
             
@@ -310,7 +321,7 @@ class RagService:
             
         return query_text
 
-    async def search_context(self, chat_id: int, query_text: str, exclude_ids: Optional[List[int]] = None, top_k: int = 5, context_padding: int = 2) -> str:
+    async def search_context(self, chat_id: int, query_text: str, exclude_ids: Optional[List[int]] = None, top_k: int = 5, context_padding: int = 3) -> str:
         """
         检索相关上下文 (Context Window Expansion)
         
@@ -330,6 +341,14 @@ class RagService:
         limit = top_k if top_k else self.DEFAULT_TOP_K
         
         configs = await config_service.get_all_settings()
+        
+        # 动态读取 Padding 配置
+        current_padding = context_padding
+        try:
+            if val := configs.get("rag_context_padding"):
+                current_padding = int(val)
+        except: pass
+        
         threshold = self.DEFAULT_SIMILARITY_THRESHOLD
         try:
             if val := configs.get("rag_similarity_threshold"):
@@ -343,7 +362,7 @@ class RagService:
                 start_msg = (
                     f"🔍 <b>RAG Search: Interaction Mode</b>\n"
                     f"Chat: <code>{chat_id}</code> | Q: <code>{html.escape(sanitized_query)}</code>\n"
-                    f"TopK: {limit} | Pad: {context_padding}"
+                    f"TopK: {limit} | Pad: {current_padding}"
                 )
                 await bot_module.bot.send_message(settings.ADMIN_USER_ID, start_msg, parse_mode='HTML')
         except: pass
@@ -410,7 +429,7 @@ class RagService:
                         WHERE chat_id = :cid AND id < :aid 
                         ORDER BY id DESC LIMIT :pad
                     """)
-                    pre_res = await session.execute(pre_sql, {"cid": chat_id, "aid": anchor_id, "pad": context_padding})
+                    pre_res = await session.execute(pre_sql, {"cid": chat_id, "aid": anchor_id, "pad": current_padding})
                     pre_ids = [r.id for r in pre_res.fetchall()]
                     
                     # 获取后文 (Post-context)
@@ -419,7 +438,7 @@ class RagService:
                         WHERE chat_id = :cid AND id > :aid 
                         ORDER BY id ASC LIMIT :pad
                     """)
-                    post_res = await session.execute(post_sql, {"cid": chat_id, "aid": anchor_id, "pad": context_padding})
+                    post_res = await session.execute(post_sql, {"cid": chat_id, "aid": anchor_id, "pad": current_padding})
                     post_ids = [r.id for r in post_res.fetchall()]
 
 
