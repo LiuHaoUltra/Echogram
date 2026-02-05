@@ -138,3 +138,31 @@ async def handle_tts_speed_input(update: Update, context: ContextTypes.DEFAULT_T
         )
     
     return ConversationHandler.END
+
+async def handle_tts_prompt_lang_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """处理 TTS 参考音频语言输入"""
+    lang = update.message.text.strip().lower()
+    
+    # 验证语言代码
+    if lang not in ["zh", "en", "ja", "ko"]:
+        await update.message.reply_text("⚠️ 无效的语言代码，请输入 zh、en、ja ...")
+        return ConversationHandler.END
+    
+    await config_service.set_value("tts_prompt_lang", lang)
+    
+    await update.message.reply_text(f"✅ 参考音频语言 (Prompt Lang) 已设置为: {lang}")
+    
+    # 返回主菜单
+    overview = await get_dashboard_overview_text(update.effective_chat.id)
+    panel_id = context.user_data.get('last_panel_id')
+    
+    if panel_id:
+        await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=panel_id,
+            text=overview,
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode="HTML"
+        )
+    
+    return ConversationHandler.END

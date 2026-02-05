@@ -300,13 +300,24 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "set_tts_lang":
         current_val = await config_service.get_value("tts_text_lang", "zh")
         await query.edit_message_text(
-            text=f"🌐 <b>设置 TTS 语言</b>\n\n当前: <code>{current_val}</code>\n\n请输入语言代码\n• <code>zh</code> = 中文\n• <code>en</code> = 英文",
+            text=f"🌐 <b>设置 TTS 目标语言 (Target Lang)</b>\n\n当前: <code>{current_val}</code>\n\n请输入生成语音的语言代码\n• <code>zh</code> = 中文\n• <code>en</code> = 英文\n• <code>ja</code> = 日文",
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )
         context.user_data['last_panel_id'] = query.message.message_id
         from dashboard.states import WAITING_INPUT_TTS_LANG
         return WAITING_INPUT_TTS_LANG
+
+    if data == "set_tts_prompt_lang":
+        current_val = await config_service.get_value("tts_prompt_lang", "zh")
+        await query.edit_message_text(
+            text=f"🗣️ <b>设置参考音频语言 (Prompt Lang)</b>\n\n当前: <code>{current_val}</code>\n\n请输入参考音频实际使用的语言\n• <code>zh</code> = 中文\n• <code>ja</code> = 日文 (推荐)\n• <code>en</code> = 英文\n\n⚠️ <b>注意</b>: 若参考音频为日文，此处必须设为 ja，否则会导致生成失败。",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML"
+        )
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_TTS_PROMPT_LANG
+        return WAITING_INPUT_TTS_PROMPT_LANG
     
     if data == "set_tts_speed":
         current_val = await config_service.get_value("tts_speed_factor", "1.0")
