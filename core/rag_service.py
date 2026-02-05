@@ -354,4 +354,45 @@ class RagService:
         else:
             await self.clear_all_vectors()
 
+    async def get_vector_stats(self, chat_id: int) -> Dict[str, Any]:
+        """
+        获取指定会话的向量索引统计
+        """
+        async for session in get_db_session():
+            try:
+                # 统计：符合索引条件的非空消息总数 vs 已索引数量
+                # 排除系统占位符
+                stmt = text("""
+                    SELECT 
+                        COUNT(h.id) as total,
+                        COUNT(v.rowid) as indexed
+                    FROM history h
+                    LEFT JOIN history_vec v ON h.id = v.rowid
+                    WHERE h.chat_id = :chat_id
+                      AND h.content IS NOT NULL
+                      AND h.content != ''
+                      AND h.content NOT LIKE '[%: Processing...]'
+                """)
+                
+                result = await session.execute(stmt, {"chat_id": chat_id})
+                row = result.fetchone()
+                total = row.total if row else 0
+                indexed = row.indexed if row else 0
+                
+                # 检查冷却状态
+                cooldown_left = 0
+                if chat_id in self._sync_cooldowns:
+                     passed = time.time() - self._sync_cooldowns[chat_id]
+                     if passed < self.SYNC_COOLDOWN_SECONDS:
+                         cooldown_left = int(self.SYNC_COOLDOWN_SECONDS - passed)
+                
+                return {
+                    "total_eligible": total,
+                    "indexed": indexed,
+                    "cooldown_left": cooldown_left
+                }
+            except Exception as e:
+                logger.error(f"RAG Stats failed: {e}")
+                return {"error": str(e)}
+
 rag_service = RagService()
