@@ -130,7 +130,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<code>{make_bar(buffer_tokens, T)} {buffer_percent}%</code>\n"
         f"({buffer_tokens} / {T} tokens)\n\n"
         f"🔮 <b>RAG Index</b>:\n"
-        f"Indexed: <code>{rag_indexed} / {rag_total}</code> ({rag_percent}%)\n"
+        f"Turns Indexed: <code>{rag_indexed} / {rag_total}</code> ({rag_percent}%)\n"
         f"Status: {rag_status_str}\n\n"
         f"🕒 Last Summary: {time_str}"
     )
