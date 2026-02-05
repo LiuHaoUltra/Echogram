@@ -20,8 +20,11 @@ def load_extensions(dbapi_conn, conn_record):
             dbapi_conn.enable_load_extension(True)
             sqlite_vec.load(dbapi_conn)
             dbapi_conn.enable_load_extension(False)
-        except Exception:
-            pass
+        except Exception as e:
+            # 这里不能轻易打印 log，因为 logger 可能还未初始化完全，或者会有大量刷屏
+            # 但为了调试 RAG 问题，我们打印到 stderr
+            import sys
+            sys.stderr.write(f"Error loading sqlite-vec extension: {e}\n")
 
 # 创建异步会话工厂
 AsyncSessionLocal = async_sessionmaker(
@@ -40,7 +43,12 @@ def _load_vec_sync(conn):
             dbapi_conn.enable_load_extension(True)
             sqlite_vec.load(dbapi_conn)
             dbapi_conn.enable_load_extension(False)
-    except Exception:
+            # print("✅ sqlite-vec loaded successfully via _load_vec_sync")
+    except Exception as e:
+        import logging
+        logging.getLogger("echogram").error(f"❌ Failed to load sqlite-vec extension: {e}", exc_info=True)
+        # 不要吞掉异常，否则后面建表会报错 'no such module'
+        # 但考虑到某些环境可能不兼容，我们可以选择 log 后让它挂在 SQL 执行处，或者在这里就抛出
         pass
 
 async def init_db():
