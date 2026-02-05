@@ -265,9 +265,19 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 # 包括 base_msgs 和 tail_msgs
                 context_ids = [m.id for m in history_msgs if m.id]
                 
+                # --- Query Rewriting (Contextualization) ---
+                # 准备最近几条上下文给 Rewriter
+                recent_context_strs = []
+                # 取 history_msgs 的最后 6 条 (包含 base 和 tail)
+                for m in history_msgs[-6:]:
+                    content_snippet = (m.content[:30] + "..") if len(m.content) > 30 else m.content
+                    recent_context_strs.append(f"{m.role.capitalize()}: {content_snippet}")
+                
+                rewritten_query = await rag_service.contextualize_query(current_query, recent_context_strs)
+                
                 found_context = await rag_service.search_context(
                     chat_id, 
-                    current_query, 
+                    rewritten_query, 
                     exclude_ids=context_ids
                 )
                 

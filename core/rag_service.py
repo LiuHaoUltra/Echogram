@@ -241,6 +241,75 @@ class RagService:
                 logger.error(f"RAG Sync failed for chat {chat_id}: {e}")
                 self._sync_cooldowns[chat_id] = time.time()
 
+    async def contextualize_query(self, query_text: str, context_msgs: List[str]) -> str:
+        """
+        [Query Rewriting]
+        使用摘要模型快速重写查询，消除指代不明 (Resolution of Coreference)。
+        只在 query 较短或包含代词时触发 (由调用方控制，或在此处简单判断)。
+        """
+        # 简单启发式过滤：如果很长，可能不需要重写 (省钱)
+        if len(query_text) > 40:
+            return query_text
+
+        try:
+            configs = await config_service.get_all_settings()
+            summary_model = configs.get("summary_model")
+            
+            # 如果没配摘要模型，则降级使用主模型；如果主模型也没配，则跳过
+            if not summary_model:
+                summary_model = configs.get("model_name")
+            
+            if not summary_model:
+                return query_text
+
+            client = await self._get_client()
+            
+            # 构建轻量级 Context
+            # context_msgs 应该是 ["User: ...", "Assistant: ..."] 的最近几条
+            context_block = "\n".join(context_msgs[-4:]) # 只看最近 2 轮
+            
+            sys_prompt = (
+                "You are a helpful assistant. "
+                "Read the conversation context and the user's latest input. "
+                "If the input is vague (e.g., uses 'it', 'this', 'that', 'why') or depends on context, "
+                "rewrite it into a standalone sentence that clearly expresses the user's intent. "
+                "If the input is already clear, emotional (e.g., 'haha', 'love you'), or meaningless, return it EXACTLY as is. "
+                "Do NOT explain. Output ONLY the rewritten string."
+            )
+            
+            # User Constraint: "不要弄得和专业用途一样" -> Keep it natural.
+            # 实际上 prompt 只要不要求 "formal" 即可。
+            
+            resp = await client.chat.completions.create(
+                model=summary_model,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": f"Context:\n{context_block}\n\nLatest Input: {query_text}"}
+                ],
+                temperature=0.3, # 偏确定性
+                max_tokens=60
+            )
+            
+            if resp.choices and resp.choices[0].message.content:
+                rewritten = resp.choices[0].message.content.strip()
+                # 简单清洗：去掉引号
+                if rewritten.startswith('"') and rewritten.endswith('"'):
+                    rewritten = rewritten[1:-1]
+                
+                if "cannot" in rewritten or "sorry" in rewritten.lower():
+                    return query_text
+                    
+                # [DEBUG] 只有当发生实质变化时才打 Log
+                if rewritten.lower() != query_text.lower():
+                    logger.info(f"RAG Rewrite: '{query_text}' -> '{rewritten}'")
+                
+                return rewritten
+            
+        except Exception as e:
+            logger.warning(f"Query Rewrite failed: {e}")
+            
+        return query_text
+
     async def search_context(self, chat_id: int, query_text: str, exclude_ids: Optional[List[int]] = None, top_k: int = 5, context_padding: int = 2) -> str:
         """
         检索相关上下文 (Context Window Expansion)
@@ -272,7 +341,7 @@ class RagService:
             import core.bot as bot_module
             if bot_module.bot:
                 start_msg = (
-                    f"🔍 <b>RAG Search: Context Mode</b>\n"
+                    f"🔍 <b>RAG Search: Interaction Mode</b>\n"
                     f"Chat: <code>{chat_id}</code> | Q: <code>{html.escape(sanitized_query)}</code>\n"
                     f"TopK: {limit} | Pad: {context_padding}"
                 )
@@ -451,7 +520,7 @@ class RagService:
                     import core.bot as bot_module
                     if bot_module.bot:
                         debug_msg = (
-                            f"✅ <b>RAG Context: Constructed</b>\n"
+                            f"✅ <b>RAG Result: Interaction Mode</b>\n"
                             f"Blocks: {len(output_blocks)} | Total Msgs: {len(all_needed_ids)}\n"
                             f"<pre>{html.escape(final_context[:3000])}</pre>" # Truncate for TG
                         )
