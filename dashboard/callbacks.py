@@ -240,7 +240,7 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
             [InlineKeyboardButton("🔙 取消", callback_data="menu_rag")]
         ]
         await query.edit_message_text(
-            text="<b>⚠️ 危险操作</b>\n\n确定要清空当前会话的向量索引吗？\n这将触发下一次全量同步，可能需要几分钟时间。",
+            text="<b>⚠️ 危险操作 (Global)</b>\n\n确定要清空 <b>所有会话</b> 的向量索引吗？\n这将影响所有群组的数据，并触发大规模后台同步。",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -248,11 +248,11 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
 
     if data == "rag_rebuild_confirm":
         from core.rag_service import rag_service
-        chat_id = update.effective_chat.id
-        await rag_service.rebuild_index(chat_id)
+        # Global rebuild (pass None)
+        await rag_service.rebuild_index()
         
         await query.edit_message_text(
-            text="<b>✅ 索引已清除</b>\n\n下次对话时将自动触发后台同步。",
+            text="<b>✅ 全局索引已清除 (Global Index Cleared)</b>\n\n数据库中所有会话的向量数据已重置。\n各群组在下次对话时将自动触发后台同步。",
             parse_mode="HTML"
         )
         return ConversationHandler.END

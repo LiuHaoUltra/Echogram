@@ -326,8 +326,32 @@ class RagService:
             except Exception as e:
                 logger.error(f"RAG Clear failed for chat {chat_id}: {e}")
 
-    async def rebuild_index(self, chat_id: int):
-        """Rebuild Index 别名"""
-        await self.clear_chat_vectors(chat_id)
+    async def clear_all_vectors(self):
+        """
+        [Danger] 清除整个数据库的所有向量索引
+        用于切换 Embedding 模型时的全局重建
+        """
+        async for session in get_db_session():
+            try:
+                await session.execute(text("DELETE FROM history_vec"))
+                await session.commit()
+                
+                # 清除所有冷却
+                self._sync_cooldowns.clear()
+                
+                logger.warning("RAG: GLOBALLY CLEARED all vector indices!")
+            except Exception as e:
+                logger.error(f"RAG Global Clear failed: {e}")
+
+    async def rebuild_index(self, chat_id: int = None):
+        """
+        Rebuild Index
+        如果指定 chat_id，只清除该会话。
+        如果不指定 (None)，则清除所有 (Global).
+        """
+        if chat_id:
+            await self.clear_chat_vectors(chat_id)
+        else:
+            await self.clear_all_vectors()
 
 rag_service = RagService()
