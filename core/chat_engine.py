@@ -261,9 +261,16 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                      break
             
             if current_query:
-                # 排除当前 Query 本身? search_context 内部逻辑是查库，当前 Query 刚存库如果不做排除可能会查到自己
-                # 但 search_context 也可以用 limit + distance 过滤
-                found_context = await rag_service.search_context(chat_id, current_query)
+                # 收集当前上下文中的所有消息 ID 以排除 (Self-Echo Prevention)
+                # 包括 base_msgs 和 tail_msgs
+                context_ids = [m.id for m in history_msgs if m.id]
+                
+                found_context = await rag_service.search_context(
+                    chat_id, 
+                    current_query, 
+                    exclude_ids=context_ids
+                )
+                
                 if found_context:
                     rag_context = found_context
                     logger.info(f"RAG: Injected memory for '{current_query[:20]}...'")

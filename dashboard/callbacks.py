@@ -12,7 +12,8 @@ from dashboard.keyboards import (
     get_access_control_keyboard,
     get_memory_keyboard,
     get_voice_keyboard,
-    get_cancel_keyboard
+    get_cancel_keyboard,
+    get_rag_settings_keyboard
 )
 from dashboard.states import (
     WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME, WAITING_INPUT_VECTOR_MODEL,
@@ -200,6 +201,70 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         
         await query.edit_message_text(
             text="<b>✅ 重置完成 (Factory Reset Complete)</b>\n\n所有数据已清除。请发送 /start 重新开始设置向导。",
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    # --- 4.1 RAG Settings ---
+    if data == "menu_rag":
+        from dashboard.keyboards import get_rag_settings_keyboard
+        await query.edit_message_text(
+            text=(
+                "<b>🔮 RAG 高级设置</b>\n\n"
+                "配置向量检索的行为参数。\n\n"
+                "⚠️ <b>重要兼容性提示</b>:\n"
+                "本系统数据库仅支持 <b>1536 维</b> 的 Embedding 模型 (如 <code>text-embedding-3-small</code>)。\n"
+                "❌ 请勿使用 768 或其他维度的模型，否则会导致数据库写入失败。\n"
+                "ℹ️ 若更改模型，必须执行下面的 <b>Rebuild Index</b>。"
+            ), 
+            reply_markup=await get_rag_settings_keyboard(), 
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    if data.startswith("set_rag_cd:"):
+        parts = data.split(":")
+        if len(parts) > 1:
+            val = parts[1]
+            await config_service.set_value("rag_sync_cooldown", val)
+            # Refresh
+            from dashboard.keyboards import get_rag_settings_keyboard
+            try:
+                await query.edit_message_reply_markup(reply_markup=await get_rag_settings_keyboard())
+            except: pass
+        return ConversationHandler.END
+
+    if data.startswith("set_rag_th:"):
+        parts = data.split(":")
+        if len(parts) > 1:
+            val = parts[1]
+            await config_service.set_value("rag_similarity_threshold", val)
+            # Refresh
+            from dashboard.keyboards import get_rag_settings_keyboard
+            try:
+                await query.edit_message_reply_markup(reply_markup=await get_rag_settings_keyboard())
+            except: pass
+        return ConversationHandler.END
+
+    if data == "rag_rebuild_request":
+        keyboard = [
+            [InlineKeyboardButton("🛑 确认重建 (清空数据)", callback_data="rag_rebuild_confirm")],
+            [InlineKeyboardButton("🔙 取消", callback_data="menu_rag")]
+        ]
+        await query.edit_message_text(
+            text="<b>⚠️ 危险操作</b>\n\n确定要清空当前会话的向量索引吗？\n这将触发下一次全量同步，可能需要几分钟时间。",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    if data == "rag_rebuild_confirm":
+        from core.rag_service import rag_service
+        chat_id = update.effective_chat.id
+        await rag_service.rebuild_index(chat_id)
+        
+        await query.edit_message_text(
+            text="<b>✅ 索引已清除</b>\n\n下次对话时将自动触发后台同步。",
             parse_mode="HTML"
         )
         return ConversationHandler.END

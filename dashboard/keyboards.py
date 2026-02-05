@@ -64,11 +64,42 @@ def get_access_control_keyboard() -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(keyboard)
 
+    return InlineKeyboardMarkup(keyboard)
+
 def get_memory_keyboard() -> InlineKeyboardMarkup:
     keyboard = [
+        [InlineKeyboardButton("🔮 RAG 高级设置 (Vector)", callback_data="menu_rag")],
         [InlineKeyboardButton("🔢 设置记忆长度 (T)", callback_data="set_history_tokens")],
         [InlineKeyboardButton("🚨 恢复出厂设置 (Danger)", callback_data="factory_reset_request")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+async def get_rag_settings_keyboard() -> InlineKeyboardMarkup:
+    """RAG 设置菜单 (动态读取当前值)"""
+    from core.config_service import config_service
+    
+    # 读取当前配置
+    cooldown = await config_service.get_value("rag_sync_cooldown", "180")
+    threshold = await config_service.get_value("rag_similarity_threshold", "0.6")
+    
+    keyboard = [
+        # Cooldown Row
+        [
+            InlineKeyboardButton(f"⏱️ 冷却: {cooldown}s", callback_data="noop"),
+            InlineKeyboardButton("1m", callback_data="set_rag_cd:60"),
+            InlineKeyboardButton("3m", callback_data="set_rag_cd:180"),
+            InlineKeyboardButton("5m", callback_data="set_rag_cd:300")
+        ],
+        # Threshold Row
+        [
+            InlineKeyboardButton(f"🎯 相似度: {threshold}", callback_data="noop"),
+            InlineKeyboardButton("0.5", callback_data="set_rag_th:0.5"),
+            InlineKeyboardButton("0.6", callback_data="set_rag_th:0.6"),
+            InlineKeyboardButton("0.7", callback_data="set_rag_th:0.7")
+        ],
+        [InlineKeyboardButton("⚠️ Rebuild Index (Danger)", callback_data="rag_rebuild_request")],
+        [InlineKeyboardButton("🔙 返回上级", callback_data="menu_memory")]
     ]
     return InlineKeyboardMarkup(keyboard)
 

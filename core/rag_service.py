@@ -1,6 +1,8 @@
 import re
 import asyncio
-from typing import List, Dict, Any
+import json
+import time
+from typing import List, Dict, Any, Optional
 from sqlalchemy import select, text, and_
 from openai import AsyncOpenAI
 from config.settings import settings
@@ -10,8 +12,14 @@ from models.history import History
 from utils.logger import logger
 
 class RagService:
+    # 默认配置常量
+    DEFAULT_SIMILARITY_THRESHOLD = 0.6
+    DEFAULT_TOP_K = 5
+    SYNC_COOLDOWN_SECONDS = 180  # 3分钟熔断冷却
+
     def __init__(self):
         self._client = None
+        self._sync_cooldowns: Dict[int, float] = {}  # chat_id -> last_failure_time
     
     async def _get_client(self):
         """获取或初始化 OpenAI Client"""
@@ -89,11 +97,26 @@ class RagService:
         """
         懒惰全量同步 (Lazy Full-Sync)
         查出该群组所有未嵌入的历史记录，批量生成并存入。
+        增加熔断机制：如果上次失败在冷却期内，则跳过。
         """
-        import json
+        configs = await config_service.get_all_settings()
+        
+        # 动态读取冷却时间
+        cooldown = self.SYNC_COOLDOWN_SECONDS
+        try:
+            if val := configs.get("rag_sync_cooldown"):
+                cooldown = int(val)
+        except: pass
+
+        # 1. 熔断检查
+        last_fail = self._sync_cooldowns.get(chat_id, 0)
+        if time.time() - last_fail < cooldown:
+            # 处于冷却期，静默跳过
+            return
+
         async for session in get_db_session():
             try:
-                # 1. 找出所有未嵌入的 Text/Image/Voice (有实际内容的)
+                # 2. 找出所有未嵌入的 Text/Image/Voice (有实际内容的)
                 # 使用 NOT IN 查找 history_vec 中不存在的 id
                 # 限制 50 条以防超时
                 # 🔥 Fix: 增加 SQL 层过滤占位符，防止无限空转
@@ -113,11 +136,14 @@ class RagService:
                 rows = result.fetchall()
                 
                 if not rows:
+                    # 成功执行且无积压，清除可能的旧冷却记录（虽然非必须）
+                    if chat_id in self._sync_cooldowns:
+                        del self._sync_cooldowns[chat_id]
                     return
 
                 logger.info(f"RAG Sync: Found {len(rows)} messages to embed for chat {chat_id}")
 
-                # 2. 清洗与打包
+                # 3. 清洗与打包
                 items_to_embed = []
                 valid_ids = []
                 
@@ -133,10 +159,10 @@ class RagService:
                 if not items_to_embed:
                     return
 
-                # 3. 批量嵌入
+                # 4. 批量嵌入
                 embeddings = await self._embed_texts(items_to_embed)
                 
-                # 4. 写入向量表
+                # 5. 写入向量表
                 for mid, vector in zip(valid_ids, embeddings):
                     await session.execute(
                         text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
@@ -147,17 +173,48 @@ class RagService:
                 await session.commit()
                 logger.info(f"RAG Sync: Successfully indexed {len(valid_ids)} messages.")
                 
+                # 成功后清除冷却记录
+                if chat_id in self._sync_cooldowns:
+                    del self._sync_cooldowns[chat_id]
+
             except Exception as e:
                 logger.error(f"RAG Sync failed for chat {chat_id}: {e}")
-                # 不抛出异常，避免阻塞主流程
+                # 触发熔断
+                self._sync_cooldowns[chat_id] = time.time()
+                logger.warning(f"RAG Sync for chat {chat_id} entered cooldown for {cooldown}s.")
 
-    async def search_context(self, chat_id: int, query_text: str, top_k: int = 5) -> str:
+    async def search_context(self, chat_id: int, query_text: str, exclude_ids: Optional[List[int]] = None, top_k: int = 5) -> str:
         """
         检索相关上下文
+        :param exclude_ids: 需要排除的消息 ID 列表 (避免自引用)
         """
         sanitized_query = self.sanitize_content(query_text)
         if len(sanitized_query) < 3:
             return ""
+
+        # 使用默认或传入的 top_k (如果传入为 None/0 则用默认)
+        limit = top_k if top_k else self.DEFAULT_TOP_K
+        
+        configs = await config_service.get_all_settings()
+        threshold = self.DEFAULT_SIMILARITY_THRESHOLD
+        try:
+            if val := configs.get("rag_similarity_threshold"):
+                threshold = float(val)
+        except: pass
+
+        # 构建 ID 排除条件
+        exclusion_clause = ""
+        params = {
+            "chat_id": chat_id,
+            "top_k": limit,
+            "threshold": threshold
+        }
+        
+        if exclude_ids:
+            # 动态构建 NOT IN (:id1, :id2...) 过于复杂，改用 NOT IN 列表参数化
+            # SQLAlchemy text 支持绑定列表
+            exclusion_clause = "AND h.id NOT IN :exclude_ids"
+            params["exclude_ids"] = tuple(exclude_ids) # 转换为 tuple
 
         try:
             # 1. 获取 Query Vector
@@ -165,28 +222,42 @@ class RagService:
             if not query_vecs:
                 return ""
             query_vec = query_vecs[0]
+            
+            # 使用 json.dumps 确保格式安全
+            params["query_vec"] = json.dumps(query_vec)
 
             # 2. 向量检索 + JOIN
+            # 注意: vec_distance_cosine 越小越相似 (1 - cosine_similarity) ?
+            # sqlite-vec 中 cosine_distance = 1.0 - cosine_similarity
+            # 我们的阈值 0.6 原意可能是相似度 > 0.6 还是距离 < 0.6?
+            # 原代码 distance < 0.6，意味着相似度 > 0.4，这是一个很宽泛的筛选。
+            # 通常 embedding-3-small 的距离在 0.3-0.8 之间。
+            # 假设原意是保留距离小于 0.6 的 (相似度 > 0.4)
+            
+            sql = f"""
+                SELECT 
+                    h.role,
+                    h.content, 
+                    vec_distance_cosine(v.embedding, :query_vec) as distance,
+                    h.timestamp
+                FROM history_vec v
+                JOIN history h ON v.rowid = h.id
+                WHERE h.chat_id = :chat_id 
+                  AND distance < :threshold
+                  {exclusion_clause}
+                ORDER BY distance ASC
+                LIMIT :top_k
+            """
+            
             async for session in get_db_session():
-                stmt = text("""
-                    SELECT 
-                        h.role,
-                        h.content, 
-                        vec_distance_cosine(v.embedding, :query_vec) as distance,
-                        h.timestamp
-                    FROM history_vec v
-                    JOIN history h ON v.rowid = h.id
-                    WHERE h.chat_id = :chat_id 
-                      AND distance < 0.6
-                    ORDER BY distance ASC
-                    LIMIT :top_k
-                """)
+                stmt = text(sql)
                 
-                result = await session.execute(stmt, {
-                    "query_vec": str(query_vec),
-                    "chat_id": chat_id,
-                    "top_k": top_k
-                })
+                # 特殊处理列表参数绑定 (expanding=True)
+                if exclude_ids:
+                    from sqlalchemy import bindparam
+                    stmt = stmt.bindparams(bindparam("exclude_ids", expanding=True))
+                
+                result = await session.execute(stmt, params)
                 rows = result.fetchall()
                 
                 if not rows:
@@ -197,7 +268,16 @@ class RagService:
                 for row in rows:
                     # 再次清洗一下展示内容
                     content = self.sanitize_content(row.content)
-                    date_str = row.timestamp.strftime("%Y-%m-%d") if row.timestamp else "Unknown"
+                    
+                    # 兼容 timestamp 可能为 str (SQLite Raw SQL) 或 datetime
+                    date_str = "Unknown"
+                    if row.timestamp:
+                        if hasattr(row.timestamp, 'strftime'):
+                             date_str = row.timestamp.strftime("%Y-%m-%d")
+                        else:
+                             # 假设是字符串，取前10位 (YYYY-MM-DD)
+                             date_str = str(row.timestamp)[:10]
+
                     context_lines.append(f"[{date_str}] {row.role.capitalize()}: {content}")
                 
                 return "\n".join(context_lines)
@@ -205,5 +285,37 @@ class RagService:
         except Exception as e:
             logger.error(f"RAG Search failed: {e}")
             return ""
+
+    async def clear_chat_vectors(self, chat_id: int):
+        """
+        清除指定会话的所有向量数据 (物理删除)
+        用于 /reset 或 Rebuild Index
+        """
+        async for session in get_db_session():
+            try:
+                # 通过子查询删除 history_vec 中对应的 rowid
+                # 假设 history_vec 是虚拟表或普通表，rowid 对应 history.id
+                await session.execute(
+                    text("""
+                        DELETE FROM history_vec 
+                        WHERE rowid IN (
+                            SELECT id FROM history WHERE chat_id = :chat_id
+                        )
+                    """),
+                    {"chat_id": chat_id}
+                )
+                await session.commit()
+                
+                # 清除冷却状态，允许立即重新同步
+                if chat_id in self._sync_cooldowns:
+                    del self._sync_cooldowns[chat_id]
+                    
+                logger.info(f"RAG: Cleared all vectors for chat {chat_id}")
+            except Exception as e:
+                logger.error(f"RAG Clear failed for chat {chat_id}: {e}")
+
+    async def rebuild_index(self, chat_id: int):
+        """Rebuild Index 别名"""
+        await self.clear_chat_vectors(chat_id)
 
 rag_service = RagService()

@@ -21,10 +21,18 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("💡 请在群组中使用此指令，以重置该群组的会话。")
         return
 
-    await history_service.clear_history(chat.id)
-    # 同步清空长期摘要
-    from core.summary_service import summary_service
-    await summary_service.clear_summary(chat.id)
+    from core.chat_engine import CHAT_LOCKS
+    
+    # 🚨 关键：获取会话锁，防止 RAG 同步/LLM 生成期间被重置导致死锁或数据不一致
+    async with CHAT_LOCKS[chat.id]:
+        await history_service.clear_history(chat.id)
+        # 同步清空长期摘要
+        from core.summary_service import summary_service
+        await summary_service.clear_summary(chat.id)
+        
+        # 同步清空 RAG 向量数据 (物理删除)
+        from core.rag_service import rag_service
+        await rag_service.clear_chat_vectors(chat.id)
     
     await update.message.reply_text("🧹 记忆已重置！上下文和长期摘要均已清空。")
 

@@ -187,7 +187,11 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
             msg_text = f"✅ [Summary] 模型已切换为: <code>{model_name}</code>"
         elif target == 'vector':
             await config_service.set_value("vector_model_name", model_name)
-            msg_text = f"🧬 [Vector] 模型已切换为: <code>{model_name}</code>"
+            msg_text = (
+                f"🧬 [Vector] 模型已切换为: <code>{model_name}</code>\n\n"
+                "⚠️ <b>注意</b>: 如果此模型的维度不是 <b>1536</b>，RAG 可能会失效或报错。\n"
+                "ℹ️ 请前往 <b>🔮 RAG Settings</b> 执行 <b>Rebuild Index</b> 以应用变更。"
+            )
         else:
             await config_service.set_value("model_name", model_name)
             msg_text = f"✅ [Main] 模型已切换为: <code>{model_name}</code>"
