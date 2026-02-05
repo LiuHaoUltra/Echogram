@@ -3,7 +3,7 @@ import asyncio
 import json
 import time
 from typing import List, Dict, Any, Optional
-from sqlalchemy import select, text, and_
+from sqlalchemy import select, text, and_, bindparam
 from openai import AsyncOpenAI
 from config.settings import settings
 from config.database import get_db_session
@@ -111,9 +111,8 @@ class RagService:
 
     async def sync_historic_embeddings(self, chat_id: int):
         """
-        懒惰全量同步 (Lazy Full-Sync)
-        查出该群组所有未嵌入的历史记录，批量生成并存入。
-        增加熔断机制：如果上次失败在冷却期内，则跳过。
+        懒惰全量同步 (Lazy Full-Sync) - Interaction-Centric Mode
+        只索引 AI 消息，并自动融合前序用户问题 (User Context + AI Response)。
         """
         configs = await config_service.get_all_settings()
         
@@ -127,20 +126,17 @@ class RagService:
         # 1. 熔断检查
         last_fail = self._sync_cooldowns.get(chat_id, 0)
         if time.time() - last_fail < cooldown:
-            # 处于冷却期，静默跳过
             return
 
         async for session in get_db_session():
             try:
-                # 2. 找出所有未嵌入的 Text/Image/Voice (有实际内容的)
-                # 使用 NOT IN 查找 history_vec 中不存在的 id
-                # 限制 50 条以防超时
-                # 🔥 Fix: 增加 SQL 层过滤占位符，防止无限空转
+                # 2. 找出所有未嵌入的 AI 消息 (Anchors)
                 stmt = text("""
                     SELECT h.id, h.role, h.content 
                     FROM history h
                     LEFT JOIN history_vec v ON h.id = v.rowid
                     WHERE h.chat_id = :chat_id 
+                      AND h.role = 'assistant'
                       AND v.rowid IS NULL
                       AND h.content IS NOT NULL
                       AND h.content != ''
@@ -149,28 +145,60 @@ class RagService:
                 """)
                 
                 result = await session.execute(stmt, {"chat_id": chat_id})
-                rows = result.fetchall()
+                ai_rows = result.fetchall()
                 
-                if not rows:
-                    # 成功执行且无积压，清除可能的旧冷却记录（虽然非必须）
+                if not ai_rows:
                     if chat_id in self._sync_cooldowns:
                         del self._sync_cooldowns[chat_id]
                     return
 
-                logger.info(f"RAG Sync: Found {len(rows)} messages to embed for chat {chat_id}")
+                logger.info(f"RAG Sync: Found {len(ai_rows)} AI anchors for chat {chat_id}")
 
-                # 3. 清洗与打包
+                # 3. Context Fusion Loop
                 items_to_embed = []
                 valid_ids = []
                 
-                for row in rows:
-                    sanitized = self.sanitize_content(row.content)
-                    # 🔥 Fix: 只要有语义就存，避免短消息导致的数据空洞
-                    if sanitized and sanitized.strip():
-                        # 拼接角色前缀，增加语义
-                        full_text = f"{row.role.capitalize()}: {sanitized}"
-                        items_to_embed.append(full_text)
-                        valid_ids.append(row.id)
+                for ai_row in ai_rows:
+                    ai_content = self.sanitize_content(ai_row.content)
+                    if not ai_content: continue
+
+                    # Lookback: 抓取最近的 User 消息 (最多 3 条连续)
+                    # 抓取 5 条备选，然后在应用层截断，防止中间夹杂 System 消息
+                    lb_sql = text("""
+                        SELECT role, content FROM history 
+                        WHERE chat_id = :cid AND id < :aid 
+                        ORDER BY id DESC LIMIT 5
+                    """)
+                    lb_res = await session.execute(lb_sql, {"cid": chat_id, "aid": ai_row.id})
+                    lb_rows = lb_res.fetchall()
+                    
+                    user_context_parts = []
+                    for prev_msg in lb_rows:
+                        if prev_msg.role == 'user':
+                            prev_content = self.sanitize_content(prev_msg.content)
+                            if prev_content:
+                                user_context_parts.insert(0, prev_content) # 插入到开头，保持时序
+                                if len(user_context_parts) >= 3: # Max 3 context
+                                    break
+                        else:
+                            # 遇到非 User 消息 (System/AI)，中断回溯，不仅是跳过，而是视为上一轮结束
+                            break
+                    
+                    # 融合构建语义块
+                    # Format: 
+                    # User: ...
+                    # Assistant: ...
+                    
+                    fused_text = ""
+                    if user_context_parts:
+                        user_block = " ".join(user_context_parts)
+                        fused_text = f"User: {user_block}\nAssistant: {ai_content}"
+                    else:
+                        # Orphan AI (无上文)
+                        fused_text = f"Assistant: {ai_content}"
+                    
+                    items_to_embed.append(fused_text)
+                    valid_ids.append(ai_row.id)
                 
                 if not items_to_embed:
                     return
@@ -183,63 +211,53 @@ class RagService:
                     import core.bot as bot_module
                     if bot_module.bot:
                         debug_msg = (
-                            f"🔮 <b>RAG Debug: Embedding Sync</b>\n"
-                            f"━━━━━━━━━━━━━━━\n"
-                            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                            f"<b>Count:</b> <code>{len(items_to_embed)}</code>\n"
-                            f"━━━━━━━━━━━━━━━\n\n"
-                            f"<b>Materials (Final Payload):</b>\n"
+                            f"🔮 <b>RAG Sync: Interaction Mode</b>\n"
+                            f"Chat: <code>{chat_id}</code> | Count: <code>{len(items_to_embed)}</code>\n"
+                            f"<pre>{html.escape(items_to_embed[0][:200])}...</pre>"
                         )
-                        
-                        # 拼接清洗后的内容
-                        payload_text = "\n\n".join([f"• {html.escape(t)}" for t in items_to_embed])
-                        
-                        # 避免消息过长导致发送失败
-                        if len(payload_text) > 3500:
-                            payload_text = payload_text[:3500] + "\n\n... (Content truncated due to length)"
-                        
-                        debug_msg += f"<pre>{payload_text}</pre>"
-                        
-                        await bot_module.bot.send_message(
-                            chat_id=settings.ADMIN_USER_ID,
-                            text=debug_msg,
-                            parse_mode='HTML'
-                        )
-                except Exception as notify_err:
-                    logger.warning(f"RAG Debug Notification failed: {notify_err}")
+                        # 仅发送第一条作为示例，避免刷屏
+                        if len(items_to_embed) > 0:
+                            await bot_module.bot.send_message(
+                                chat_id=settings.ADMIN_USER_ID,
+                                text=debug_msg,
+                                parse_mode='HTML'
+                            )
+                except: pass
 
                 # 6. 写入向量表
                 for mid, vector in zip(valid_ids, embeddings):
                     await session.execute(
                         text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
-                        # 🔥 Optimization: 使用 json.dumps 更稳健
                         {"id": mid, "embedding": json.dumps(vector)} 
                     )
                 
                 await session.commit()
-                logger.info(f"RAG Sync: Successfully indexed {len(valid_ids)} messages.")
+                logger.info(f"RAG Sync: Indexed {len(valid_ids)} interactions.")
                 
-                # 成功后清除冷却记录
                 if chat_id in self._sync_cooldowns:
                     del self._sync_cooldowns[chat_id]
 
             except Exception as e:
                 logger.error(f"RAG Sync failed for chat {chat_id}: {e}")
-                # 触发熔断
                 self._sync_cooldowns[chat_id] = time.time()
-                logger.warning(f"RAG Sync for chat {chat_id} entered cooldown for {cooldown}s.")
 
-    async def search_context(self, chat_id: int, query_text: str, exclude_ids: Optional[List[int]] = None, top_k: int = 5) -> str:
+    async def search_context(self, chat_id: int, query_text: str, exclude_ids: Optional[List[int]] = None, top_k: int = 5, context_padding: int = 2) -> str:
         """
-        检索相关上下文
+        检索相关上下文 (Context Window Expansion)
+        
+        策略:
+        1. Vector Search: 找到 Top K 核心匹配 (Anchors).
+        2. Expansion: 对每个 Anchor，基于逻辑顺序查询前后文 (解决 ID Gap 问题).
+        3. Clustering: 合并重叠的上下文窗口.
+        4. Formatting: 输出带焦点的对话块.
+
         :param exclude_ids: 需要排除的消息 ID 列表 (避免自引用)
+        :param context_padding: 每个 Anchor 前后扩展的消息数量
         """
         sanitized_query = self.sanitize_content(query_text)
-        # 对于中文，2个字就有语义了，降低限制
         if len(sanitized_query) < 2:
             return ""
 
-        # 使用默认或传入的 top_k (如果传入为 None/0 则用默认)
         limit = top_k if top_k else self.DEFAULT_TOP_K
         
         configs = await config_service.get_all_settings()
@@ -249,132 +267,201 @@ class RagService:
                 threshold = float(val)
         except: pass
 
-        # [DEBUG] 通知超级管理员：开始检索
+        # [DEBUG] Start Notification
         try:
             import core.bot as bot_module
             if bot_module.bot:
                 start_msg = (
-                    f"🔍 <b>RAG Debug: Search Attempt</b>\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                    f"<b>Query:</b> <code>{html.escape(sanitized_query)}</code>\n"
-                    f"<b>Threshold:</b> <code>{threshold}</code>\n"
-                    f"━━━━━━━━━━━━━━━"
+                    f"🔍 <b>RAG Search: Context Mode</b>\n"
+                    f"Chat: <code>{chat_id}</code> | Q: <code>{html.escape(sanitized_query)}</code>\n"
+                    f"TopK: {limit} | Pad: {context_padding}"
                 )
-                await bot_module.bot.send_message(
-                    chat_id=settings.ADMIN_USER_ID,
-                    text=start_msg,
-                    parse_mode='HTML'
-                )
-        except Exception as notify_err:
-            logger.warning(f"RAG Search Start Notification failed: {notify_err}")
-
-        # 构建 ID 排除条件
-        exclusion_clause = ""
-        params = {
-            "chat_id": chat_id,
-            "top_k": limit,
-            "threshold": threshold
-        }
-        
-        if exclude_ids:
-            # 动态构建 NOT IN (:id1, :id2...) 过于复杂，改用 NOT IN 列表参数化
-            # SQLAlchemy text 支持绑定列表
-            exclusion_clause = "AND h.id NOT IN :exclude_ids"
-            params["exclude_ids"] = tuple(exclude_ids) # 转换为 tuple
+                await bot_module.bot.send_message(settings.ADMIN_USER_ID, start_msg, parse_mode='HTML')
+        except: pass
 
         try:
-            # 1. 获取 Query Vector
+            # 1. Get Query Vector
             query_vecs = await self._embed_texts([sanitized_query])
             if not query_vecs:
+                print(f"[DEBUG] No query vector generated", file=sys.stderr)
                 return ""
             query_vec = query_vecs[0]
             
-            # 使用 json.dumps 确保格式安全
-            params["query_vec"] = json.dumps(query_vec)
-
-            # 2. 向量检索 + JOIN
-            sql = f"""
-                SELECT 
-                    h.role,
-                    h.content, 
-                    vec_distance_cosine(v.embedding, :query_vec) as distance,
-                    h.timestamp
-                FROM history_vec v
-                JOIN history h ON v.rowid = h.id
-                WHERE h.chat_id = :chat_id 
-                  AND distance < :threshold
-                  {exclusion_clause}
-                ORDER BY distance ASC
-                LIMIT :top_k
-            """
-            
             async for session in get_db_session():
-                stmt = text(sql)
+                # ---------------------------------------------------------
+                # Step 1: Vector Search (Find Anchors)
+                # ---------------------------------------------------------
+                exclusion_clause = ""
+                params = {
+                    "chat_id": chat_id, 
+                    "query_vec": json.dumps(query_vec),
+                    "threshold": threshold,
+                    "top_k": limit
+                }
                 
-                # 特殊处理列表参数绑定 (expanding=True)
                 if exclude_ids:
-                    from sqlalchemy import bindparam
+                    exclusion_clause = "AND h.id NOT IN :exclude_ids"
+                    params["exclude_ids"] = tuple(exclude_ids)
+
+                anchor_sql = f"""
+                    SELECT h.id, vec_distance_cosine(v.embedding, :query_vec) as distance
+                    FROM history_vec v
+                    JOIN history h ON v.rowid = h.id
+                    WHERE h.chat_id = :chat_id 
+                      AND vec_distance_cosine(v.embedding, :query_vec) < :threshold
+                      {exclusion_clause}
+                    ORDER BY distance ASC
+                    LIMIT :top_k
+                """
+                
+                stmt = text(anchor_sql)
+                if exclude_ids:
                     stmt = stmt.bindparams(bindparam("exclude_ids", expanding=True))
                 
                 result = await session.execute(stmt, params)
-                rows = result.fetchall()
+                anchors = result.fetchall()  # [(id, distance), ...]
                 
-                if not rows:
-                    # [DEBUG] 通知无匹配
-                    try:
-                        import core.bot as bot_module
-                        if bot_module.bot:
-                            await bot_module.bot.send_message(
-                                chat_id=settings.ADMIN_USER_ID,
-                                text=f"🔍 <b>RAG Debug: No Match</b>\nChat: <code>{chat_id}</code>",
-                                parse_mode='HTML'
-                            )
-                    except: pass
+                if not anchors:
                     return ""
                 
-                # 3. 格式化结果
-                context_lines = []
-                for row in rows:
-                    # 再次清洗一下展示内容
-                    content = self.sanitize_content(row.content)
+                anchor_map = {row.id: row.distance for row in anchors}
+                sorted_anchor_ids = [row.id for row in anchors]
+
+                # ---------------------------------------------------------
+                # Step 2: Logical Expansion (Fixing ID Gaps)
+                # ---------------------------------------------------------
+                # Clusters: List[Set[int]] - 初始每个 Anchor 一个 Cluster
+                clusters: List[set] = []
+
+                for anchor_id in sorted_anchor_ids:
+                    # 获取前文 (Pre-context)
+                    # 倒序取 limit，结果需反转
+                    pre_sql = text("""
+                        SELECT id FROM history 
+                        WHERE chat_id = :cid AND id < :aid 
+                        ORDER BY id DESC LIMIT :pad
+                    """)
+                    pre_res = await session.execute(pre_sql, {"cid": chat_id, "aid": anchor_id, "pad": context_padding})
+                    pre_ids = [r.id for r in pre_res.fetchall()]
                     
-                    # 兼容 timestamp 可能为 str (SQLite Raw SQL) 或 datetime
-                    date_str = "Unknown"
-                    if row.timestamp:
-                        if hasattr(row.timestamp, 'strftime'):
-                             date_str = row.timestamp.strftime("%Y-%m-%d")
-                        else:
-                             # 假设是字符串，取前10位 (YYYY-MM-DD)
-                             date_str = str(row.timestamp)[:10]
+                    # 获取后文 (Post-context)
+                    post_sql = text("""
+                        SELECT id FROM history 
+                        WHERE chat_id = :cid AND id > :aid 
+                        ORDER BY id ASC LIMIT :pad
+                    """)
+                    post_res = await session.execute(post_sql, {"cid": chat_id, "aid": anchor_id, "pad": context_padding})
+                    post_ids = [r.id for r in post_res.fetchall()]
 
-                    context_lines.append(f"[{date_str}] {row.role.capitalize()}: {content} (dist: {row.distance:.3f})")
+
+
+
+                    # 组装当前 Cluster
+                    current_cluster = set(pre_ids + [anchor_id] + post_ids)
+                    clusters.append(current_cluster)
+
+                # ---------------------------------------------------------
+                # Step 3: Cluster Merging
+                # ---------------------------------------------------------
+                # 贪婪合并：如果有交集，则合并
+                merged_clusters: List[set] = []
                 
-                result_context = "\n".join(context_lines)
+                while clusters:
+                    base = clusters.pop(0)
+                    # 尝试与后续所有 cluster 合并
+                    i = 0
+                    while i < len(clusters):
+                        candidate = clusters[i]
+                        if not base.isdisjoint(candidate):
+                            base.update(candidate)
+                            clusters.pop(i) # 移除已被合并的
+                        else:
+                            i += 1
+                    merged_clusters.append(base)
 
-                # [DEBUG] 通知超级管理员检索结果 (最终命中)
+                # ---------------------------------------------------------
+                # Step 4: Content Fetching
+                # ---------------------------------------------------------
+                # 收集所有需要查询的 Unique ID
+                all_needed_ids = set()
+                for c in merged_clusters:
+                    all_needed_ids.update(c)
+                
+                if not all_needed_ids:
+                    return ""
+
+                # 批量获取内容
+                fetch_sql = text("SELECT id, role, content, timestamp FROM history WHERE id IN :ids")
+                fetch_stmt = fetch_sql.bindparams(bindparam("ids", expanding=True))
+                fetch_res = await session.execute(fetch_stmt, {"ids": tuple(all_needed_ids)})
+                
+                # ID -> Message Object
+                msg_map = {
+                    row.id: {
+                        "role": row.role,
+                        "content": row.content,
+                        "timestamp": row.timestamp
+                    } 
+                    for row in fetch_res.fetchall()
+                }
+
+                # ---------------------------------------------------------
+                # Step 5: Formatting with Focus Highlighting
+                # ---------------------------------------------------------
+                output_blocks = []
+                
+                # 对 Merged Clusters 按其中最小 ID 排序，保证时间序
+                merged_clusters.sort(key=lambda s: min(s))
+
+                for cluster in merged_clusters:
+                    # Cluster 内部按 ID 排序
+                    sorted_ids = sorted(list(cluster))
+                    block_lines = []
+                    
+                    for mid in sorted_ids:
+                        msg = msg_map.get(mid)
+                        if not msg: continue
+                        
+                        # Date Formatting
+                        date_str = "Unknown"
+                        if msg["timestamp"]:
+                            if hasattr(msg["timestamp"], 'strftime'):
+                                date_str = msg["timestamp"].strftime("%Y-%m-%d %H:%M")
+                            else:
+                                date_str = str(msg["timestamp"])[:16]
+
+                        content = self.sanitize_content(msg["content"])
+                        line = f"[{date_str}] {msg['role'].capitalize()}: {content}"
+
+                        # Check if this is an Anchor
+                        if mid in anchor_map:
+                            dist = anchor_map[mid]
+                            # Highlight Anchor
+                            line = f">>> {line} (Match: {dist:.3f}) <<<"
+                        
+                        block_lines.append(line)
+                    
+                    output_blocks.append("\n".join(block_lines))
+
+                # Join blocks with explicit separator
+                final_context = "\n\n... (Context Skip) ...\n\n".join(output_blocks)
+
+                # [DEBUG] Success Notification
                 try:
                     import core.bot as bot_module
                     if bot_module.bot:
                         debug_msg = (
-                            f"✅ <b>RAG Debug: Found Matches</b>\n"
-                            f"━━━━━━━━━━━━━━━\n"
-                            f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
-                            f"━━━━━━━━━━━━━━━\n\n"
-                            f"<pre>{html.escape(result_context)}</pre>"
+                            f"✅ <b>RAG Context: Constructed</b>\n"
+                            f"Blocks: {len(output_blocks)} | Total Msgs: {len(all_needed_ids)}\n"
+                            f"<pre>{html.escape(final_context[:3000])}</pre>" # Truncate for TG
                         )
-                        await bot_module.bot.send_message(
-                            chat_id=settings.ADMIN_USER_ID,
-                            text=debug_msg,
-                            parse_mode='HTML'
-                        )
-                except Exception as notify_err:
-                    logger.warning(f"RAG Search Debug Notification failed: {notify_err}")
+                        await bot_module.bot.send_message(settings.ADMIN_USER_ID, debug_msg, parse_mode='HTML')
+                except: pass
 
-                return result_context
+                return final_context
 
         except Exception as e:
-            logger.error(f"RAG Search failed: {e}")
+            logger.error(f"RAG Search failed: {e}", exc_info=True)
             return ""
 
     async def clear_chat_vectors(self, chat_id: int):
