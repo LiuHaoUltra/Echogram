@@ -10,6 +10,7 @@ from config.database import get_db_session
 from core.config_service import config_service
 from models.history import History
 from utils.logger import logger
+import html
 
 class RagService:
     # 默认配置常量
@@ -177,7 +178,36 @@ class RagService:
                 # 4. 批量嵌入
                 embeddings = await self._embed_texts(items_to_embed)
                 
-                # 5. 写入向量表
+                # 5. [DEBUG] 通知超级管理员
+                try:
+                    from core.bot import bot
+                    debug_msg = (
+                        f"🔮 <b>RAG Debug: Embedding Sync</b>\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                        f"<b>Count:</b> <code>{len(items_to_embed)}</code>\n"
+                        f"━━━━━━━━━━━━━━━\n\n"
+                        f"<b>Materials (Final Payload):</b>\n"
+                    )
+                    
+                    # 拼接清洗后的内容
+                    payload_text = "\n\n".join([f"• {html.escape(t)}" for t in items_to_embed])
+                    
+                    # 避免消息过长导致发送失败
+                    if len(payload_text) > 3500:
+                        payload_text = payload_text[:3500] + "\n\n... (Content truncated due to length)"
+                    
+                    debug_msg += f"<pre>{payload_text}</pre>"
+                    
+                    await bot.send_message(
+                        chat_id=settings.ADMIN_USER_ID,
+                        text=debug_msg,
+                        parse_mode='HTML'
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"RAG Debug Notification failed: {notify_err}")
+
+                # 6. 写入向量表
                 for mid, vector in zip(valid_ids, embeddings):
                     await session.execute(
                         text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
@@ -295,7 +325,36 @@ class RagService:
 
                     context_lines.append(f"[{date_str}] {row.role.capitalize()}: {content}")
                 
-                return "\n".join(context_lines)
+                result_context = "\n".join(context_lines)
+
+                # [DEBUG] 通知超级管理员检索结果
+                try:
+                    from core.bot import bot
+                    debug_msg = (
+                        f"🔍 <b>RAG Debug: Search Result</b>\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"<b>Chat ID:</b> <code>{chat_id}</code>\n"
+                        f"<b>Query:</b> <code>{html.escape(query_text)}</code>\n"
+                        f"━━━━━━━━━━━━━━━\n\n"
+                        f"<b>Matched Context:</b>\n"
+                    )
+                    
+                    # 避免消息过长
+                    safe_context = html.escape(result_context)
+                    if len(safe_context) > 3500:
+                        safe_context = safe_context[:3500] + "\n\n... (Result truncated)"
+                        
+                    debug_msg += f"<pre>{safe_context}</pre>"
+                    
+                    await bot.send_message(
+                        chat_id=settings.ADMIN_USER_ID,
+                        text=debug_msg,
+                        parse_mode='HTML'
+                    )
+                except Exception as notify_err:
+                    logger.warning(f"RAG Search Debug Notification failed: {notify_err}")
+
+                return result_context
 
         except Exception as e:
             logger.error(f"RAG Search failed: {e}")
