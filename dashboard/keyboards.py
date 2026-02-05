@@ -40,6 +40,7 @@ def get_api_settings_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔗 设置 Base URL", callback_data="set_api_url")],
         [InlineKeyboardButton("🔑 设置 API Key", callback_data="set_api_key")],
         [InlineKeyboardButton("🤖 设置主模型 (Main)", callback_data="set_model_name")],
+        [InlineKeyboardButton("🧬 设置向量模型 (Vector)", callback_data="set_vector_model")],
         [InlineKeyboardButton("🧠 设置摘要模型 (Summary)", callback_data="set_summary_model")],
         [InlineKeyboardButton("⏳ 设置聚合延迟 (Debounce)", callback_data="set_aggregation_latency")],
         [InlineKeyboardButton("🔙 返回主菜单", callback_data="menu_main")]

@@ -20,6 +20,11 @@ from utils.logger import logger
 from utils.prompts import prompt_builder
 from utils.config_validator import safe_int_config, safe_float_config
 from core.sender_service import sender_service
+from core.rag_service import rag_service
+from collections import defaultdict
+
+# 会话级 RAG 锁，防止并发导致重复嵌入
+CHAT_LOCKS = defaultdict(asyncio.Lock)
 
 
 async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -209,34 +214,71 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         return
 
     dynamic_summary = await summary_service.get_summary(chat_id)
-    # Token limit check
-    target_tokens = safe_int_config(
-        configs.get("history_tokens"),
-        settings.HISTORY_WINDOW_TOKENS,
-        min_val=100, max_val=50000
-    )
-    
-    # 1. 获取基础历史记录
-    history_msgs = await history_service.get_token_controlled_context(chat_id, target_tokens=target_tokens)
-    
-    # 2. 识别“尾部”聚合区间 (自上一条 Assistant 消息之后的所有 User 消息)
-    last_assistant_idx = -1
-    for i in range(len(history_msgs) - 1, -1, -1):
-        if history_msgs[i].role == 'assistant':
-            last_assistant_idx = i
-            break
-            
-    if last_assistant_idx == -1:
-        tail_msgs = history_msgs
-        base_msgs = []
-    else:
-        base_msgs = history_msgs[:last_assistant_idx+1]
-        tail_msgs = history_msgs[last_assistant_idx+1:]
 
-    # 3. 准备系统提示词
-    # 只要末尾存在语音或图片，就启用对应的多模态协议
-    has_v = any(m.message_type == 'voice' for m in tail_msgs)
-    has_i = any(m.message_type == 'image' for m in tail_msgs)
+    # --- RAG Integration & Core Locking ---
+    # 按照指示，整个生成过程需要在锁内执行，以保证 Strict Serialization
+    async with CHAT_LOCKS[chat_id]:
+        rag_context = ""
+        try:
+            # 1. 贪婪补录 (Lazy Full-Sync)
+            # 只要进来了，就顺便把该群欠的债全补上
+            await rag_service.sync_historic_embeddings(chat_id)
+        except Exception as e:
+            logger.error(f"RAG Sync Error: {e}")
+
+        # Token limit check
+        target_tokens = safe_int_config(
+            configs.get("history_tokens"),
+            settings.HISTORY_WINDOW_TOKENS,
+            min_val=100, max_val=50000
+        )
+        
+        # 1. 获取基础历史记录
+        history_msgs = await history_service.get_token_controlled_context(chat_id, target_tokens=target_tokens)
+        
+        # 2. 识别“尾部”聚合区间 
+        last_assistant_idx = -1
+        for i in range(len(history_msgs) - 1, -1, -1):
+            if history_msgs[i].role == 'assistant':
+                last_assistant_idx = i
+                break
+                
+        if last_assistant_idx == -1:
+            tail_msgs = history_msgs
+            base_msgs = []
+        else:
+            base_msgs = history_msgs[:last_assistant_idx+1]
+            tail_msgs = history_msgs[last_assistant_idx+1:]
+    
+        # --- RAG Search ---
+        # 移到锁内执行，确保使用最新的 embeddings
+        try:
+            current_query = ""
+            for m in reversed(tail_msgs):
+                # 寻找最近一条且不是占位符的 User Message
+                if m.role == 'user' and m.content and not m.content.startswith("["):
+                     current_query = m.content
+                     break
+            
+            if current_query:
+                # 排除当前 Query 本身? search_context 内部逻辑是查库，当前 Query 刚存库如果不做排除可能会查到自己
+                # 但 search_context 也可以用 limit + distance 过滤
+                found_context = await rag_service.search_context(chat_id, current_query)
+                if found_context:
+                    rag_context = found_context
+                    logger.info(f"RAG: Injected memory for '{current_query[:20]}...'")
+        except Exception as e:
+            logger.error(f"RAG Search Error: {e}")
+    
+        if rag_context:
+            dynamic_summary += f"\n\n[Relevant Long-term Memories]\n{rag_context}"
+
+        # 3. 准备系统提示词
+        # 只要末尾存在语音或图片，就启用对应的多模态协议
+        has_v = any(m.message_type == 'voice' for m in tail_msgs)
+        has_i = any(m.message_type == 'image' for m in tail_msgs)
+    
+
 
     # 4. 检查上一轮表情违规情况 (Reaction Violation Check)
     has_rv = False
@@ -451,6 +493,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             history_msgs=history_msgs,
             message_type=reply_mtype
         )
+
 
     except Exception as e:
         logger.error(f"API Call failed: {e}")

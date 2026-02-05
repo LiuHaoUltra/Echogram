@@ -60,6 +60,9 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
         if len(summary_model) > 30: summary_model = summary_model[:27] + "..."
         summary_model_disp = f"<code>{summary_model}</code>"
 
+    vector_model = configs.get("vector_model_name", "text-embedding-3-small")
+    if len(vector_model) > 30: vector_model = vector_model[:27] + "..."
+
     latency = configs.get("aggregation_latency", "10.0")
 
     # News Push Stats
@@ -81,6 +84,7 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
         f"• Base URL: <code>{base_url}</code>\n"
         f"• Main Model: <code>{model}</code>\n"
         f"• Summary Model: {summary_model_disp}\n"
+        f"• Vector Model: <code>{vector_model}</code>\n"
         f"• Aggregation Latency: <code>{latency} s</code>\n"
         f"• Memory Threshold: <code>{configs.get('history_tokens', str(settings.HISTORY_WINDOW_TOKENS))} tokens</code>\n\n"
         "📺 <b>主动消息 (Active Push)</b>\n"

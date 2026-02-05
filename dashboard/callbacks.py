@@ -15,7 +15,7 @@ from dashboard.keyboards import (
     get_cancel_keyboard
 )
 from dashboard.states import (
-    WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME,
+    WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME, WAITING_INPUT_VECTOR_MODEL,
     WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_WHITELIST_ADD, WAITING_INPUT_WHITELIST_REMOVE,
     WAITING_INPUT_AGGREGATION_LATENCY,
     WAITING_INPUT_SUMMARY_MODEL, WAITING_INPUT_HISTORY_TOKENS, WAITING_INPUT_TEMPERATURE
@@ -72,6 +72,10 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
     if data == "set_summary_model":
         await show_model_selection_panel(update, context, target="summary")
         return WAITING_INPUT_SUMMARY_MODEL
+        
+    if data == "set_vector_model":
+        await show_model_selection_panel(update, context, target="vector")
+        return WAITING_INPUT_VECTOR_MODEL
     
     if data == "set_aggregation_latency":
         current_val = await config_service.get_value("aggregation_latency", "10")

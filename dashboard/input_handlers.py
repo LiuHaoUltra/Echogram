@@ -3,7 +3,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from core.config_service import config_service
 from core.access_service import access_service
 from dashboard.keyboards import get_main_menu_keyboard, get_persona_keyboard, get_access_control_keyboard, get_api_settings_keyboard, get_memory_keyboard, get_cancel_keyboard
-from dashboard.states import WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME, WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_TEMPERATURE
+from dashboard.states import WAITING_INPUT_API_URL, WAITING_INPUT_API_KEY, WAITING_INPUT_MODEL_NAME, WAITING_INPUT_VECTOR_MODEL, WAITING_INPUT_SYSTEM_PROMPT, WAITING_INPUT_TEMPERATURE
 from dashboard.handlers import get_dashboard_overview_text
 
 async def _try_delete_previous_panel(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
@@ -58,6 +58,20 @@ async def save_model_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await config_service.set_value("model_name", text)
     await update.message.reply_text(f"✅ Model Name 已更新为: {text}")
+    
+    overview = await get_dashboard_overview_text(update.effective_chat.id)
+    await update.message.reply_text(overview, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+    return ConversationHandler.END
+
+async def save_vector_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    if len(text) < 2:
+         await update.message.reply_text("❌ 模型名称太短。", reply_markup=get_cancel_keyboard())
+         return WAITING_INPUT_VECTOR_MODEL
+
+    await config_service.set_value("vector_model_name", text)
+    await update.message.reply_text(f"🧬 [Vector] 模型已切换为: {text}")
     
     overview = await get_dashboard_overview_text(update.effective_chat.id)
     await update.message.reply_text(overview, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")

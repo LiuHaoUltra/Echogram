@@ -14,7 +14,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配入口按钮
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_tts_url|set_tts_ref_audio|set_tts_ref_text|set_tts_lang|set_tts_speed)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_vector_model|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_tts_url|set_tts_ref_audio|set_tts_ref_text|set_tts_lang|set_tts_speed)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -28,6 +28,11 @@ def get_dashboard_handlers():
             # 模型选择
             WAITING_INPUT_MODEL_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_model_name),
+                CallbackQueryHandler(model_handlers.handle_model_callback)
+            ],
+            # 向量模型
+            WAITING_INPUT_VECTOR_MODEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_vector_model),
                 CallbackQueryHandler(model_handlers.handle_model_callback)
             ],
             # 模型搜索

@@ -57,7 +57,8 @@ async def show_model_selection_panel(update: Update, context: ContextTypes.DEFAU
     # 2. 展示键盘
     if target == 'summary':
         target_display = "Summary"
-
+    elif target == 'vector':
+        target_display = "Vector"
     else:
         target_display = "Main"
     
@@ -97,7 +98,8 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     if target == 'summary':
         target_display = "Summary"
-
+    elif target == 'vector':
+        target_display = "Vector"
     else:
         target_display = "Main"
     
@@ -183,7 +185,9 @@ async def handle_model_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if target == 'summary':
             await config_service.set_value("summary_model_name", model_name)
             msg_text = f"✅ [Summary] 模型已切换为: <code>{model_name}</code>"
-
+        elif target == 'vector':
+            await config_service.set_value("vector_model_name", model_name)
+            msg_text = f"🧬 [Vector] 模型已切换为: <code>{model_name}</code>"
         else:
             await config_service.set_value("model_name", model_name)
             msg_text = f"✅ [Main] 模型已切换为: <code>{model_name}</code>"
