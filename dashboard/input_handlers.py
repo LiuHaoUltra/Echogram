@@ -297,3 +297,40 @@ async def save_idle_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE
     from dashboard.keyboards import get_agentic_keyboard
     await update.message.reply_text(f"✅ 闲置阈值已更新为: {val} 分钟", reply_markup=get_agentic_keyboard())
     return ConversationHandler.END
+
+# --- RAG Settings ---
+async def save_rag_cooldown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    from dashboard.keyboards import get_rag_settings_keyboard
+    
+    try:
+        val = int(text)
+        if val < 5:
+            await update.message.reply_text("❌ 时间太短 (至少 5 秒)", reply_markup=get_rag_settings_keyboard())
+            return ConversationHandler.END # 或者保持状态? 这里选择 END 避免卡死
+            
+        await config_service.set_value("rag_sync_cooldown", str(val))
+        await update.message.reply_text(f"✅ RAG 冷却时间已更新为: {val} 秒", reply_markup=await get_rag_settings_keyboard())
+    except:
+        await update.message.reply_text("❌ 请输入有效的整数", reply_markup=await get_rag_settings_keyboard())
+        
+    return ConversationHandler.END
+
+async def save_rag_threshold(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _try_delete_previous_panel(context, update.effective_chat.id)
+    text = update.message.text.strip()
+    from dashboard.keyboards import get_rag_settings_keyboard
+    
+    try:
+        val = float(text)
+        if val < 0.0 or val > 1.0:
+            await update.message.reply_text("❌ 范围错误 (0.0 - 1.0)", reply_markup=await get_rag_settings_keyboard())
+            return ConversationHandler.END
+            
+        await config_service.set_value("rag_similarity_threshold", str(val))
+        await update.message.reply_text(f"✅ RAG 相似度阈值已更新为: {val}", reply_markup=await get_rag_settings_keyboard())
+    except:
+        await update.message.reply_text("❌ 请输入有效的数字", reply_markup=await get_rag_settings_keyboard())
+
+    return ConversationHandler.END

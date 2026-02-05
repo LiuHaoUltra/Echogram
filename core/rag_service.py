@@ -19,17 +19,29 @@ class RagService:
 
     def __init__(self):
         self._client = None
+        self._current_api_key = None
+        self._current_base_url = None
         self._sync_cooldowns: Dict[int, float] = {}  # chat_id -> last_failure_time
     
     async def _get_client(self):
-        """获取或初始化 OpenAI Client"""
-        if not self._client:
-            configs = await config_service.get_all_settings()
-            api_key = configs.get("api_key")
-            base_url = configs.get("api_base_url")
-            if not api_key:
-                raise ValueError("API Key not configured")
+        """获取或初始化 OpenAI Client (支持动态配置更新)"""
+        configs = await config_service.get_all_settings()
+        api_key = configs.get("api_key")
+        base_url = configs.get("api_base_url")
+        
+        if not api_key:
+             raise ValueError("API Key not configured")
+
+        # 检查配置是否变更
+        if (not self._client or 
+            api_key != self._current_api_key or 
+            base_url != self._current_base_url):
+            
             self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            self._current_api_key = api_key
+            self._current_base_url = base_url
+            # logger.info("RAG Client (re)initialized with new config.")
+            
         return self._client
 
     def sanitize_content(self, text: str) -> str:

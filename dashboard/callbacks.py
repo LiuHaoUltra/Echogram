@@ -211,10 +211,9 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(
             text=(
                 "<b>🔮 RAG 高级设置</b>\n\n"
-                "配置向量检索的行为参数。\n\n"
+                "点击下方按钮修改数值。\n\n"
                 "⚠️ <b>重要兼容性提示</b>:\n"
                 "本系统数据库仅支持 <b>1536 维</b> 的 Embedding 模型 (如 <code>text-embedding-3-small</code>)。\n"
-                "❌ 请勿使用 768 或其他维度的模型，否则会导致数据库写入失败。\n"
                 "ℹ️ 若更改模型，必须执行下面的 <b>Rebuild Index</b>。"
             ), 
             reply_markup=await get_rag_settings_keyboard(), 
@@ -222,31 +221,20 @@ async def menu_navigation_callback(update: Update, context: ContextTypes.DEFAULT
         )
         return ConversationHandler.END
 
-    if data.startswith("set_rag_cd:"):
-        parts = data.split(":")
-        if len(parts) > 1:
-            val = parts[1]
-            await config_service.set_value("rag_sync_cooldown", val)
-            # Refresh
-            from dashboard.keyboards import get_rag_settings_keyboard
-            try:
-                await query.edit_message_reply_markup(reply_markup=await get_rag_settings_keyboard())
-            except: pass
-        return ConversationHandler.END
+    if data == "trigger_set_rag_cd":
+        await query.message.reply_text("⏱️ 请输入新的冷却时间 (秒) [整数，>5]:", reply_markup=get_cancel_keyboard())
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_RAG_COOLDOWN
+        return WAITING_INPUT_RAG_COOLDOWN
 
-    if data.startswith("set_rag_th:"):
-        parts = data.split(":")
-        if len(parts) > 1:
-            val = parts[1]
-            await config_service.set_value("rag_similarity_threshold", val)
-            # Refresh
-            from dashboard.keyboards import get_rag_settings_keyboard
-            try:
-                await query.edit_message_reply_markup(reply_markup=await get_rag_settings_keyboard())
-            except: pass
-        return ConversationHandler.END
+    if data == "trigger_set_rag_th":
+        await query.message.reply_text("🎯 请输入新的相似度阈值 [0.0 - 1.0] (越小越严格):", reply_markup=get_cancel_keyboard())
+        context.user_data['last_panel_id'] = query.message.message_id
+        from dashboard.states import WAITING_INPUT_RAG_THRESHOLD
+        return WAITING_INPUT_RAG_THRESHOLD
 
-    if data == "rag_rebuild_request":
+    # Unified rebuild trigger
+    if data == "trigger_rebuild_index" or data == "rag_rebuild_request":
         keyboard = [
             [InlineKeyboardButton("🛑 确认重建 (清空数据)", callback_data="rag_rebuild_confirm")],
             [InlineKeyboardButton("🔙 取消", callback_data="menu_rag")]

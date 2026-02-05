@@ -1,5 +1,6 @@
 from openai import AsyncOpenAI
 from core.config_service import config_service
+from config.settings import settings
 from utils.logger import logger
 import json
 
