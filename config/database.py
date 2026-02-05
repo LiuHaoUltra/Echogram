@@ -13,7 +13,7 @@ engine = create_async_engine(
 )
 
 # 监听连接池事件 (更为底层，确保能捕获)
-@event.listens_for(pool.Pool, "connect")
+# @event.listens_for(pool.Pool, "connect") <-- REMOVED
 def _get_std_connection(conn):
     """
     递归解包以获取原始的 sqlite3.Connection 对象
