@@ -154,16 +154,69 @@ class RagService:
 
                 logger.info(f"RAG Sync: Found {len(ai_rows)} AI anchors for chat {chat_id}")
 
-                # 3. Context Fusion Loop
-                items_to_embed = []
-                valid_ids = []
+                # 3. Context Fusion Loop (Sequential Merging)
+                db_write_ops = [] # list of (id, vector_or_placeholder)
+                texts_to_embed = [] # list of strings
+                text_map_indices = [] # indices in db_write_ops that need embedding filling
                 
-                for ai_row in ai_rows:
-                    ai_content = self.sanitize_content(ai_row.content)
-                    if not ai_content: continue
+                processed_ids = set() # ids handled in this batch (as Head or Tail)
 
-                    # Lookback: 抓取最近的 User 消息 (最多 3 条连续)
-                    # 抓取 5 条备选，然后在应用层截断，防止中间夹杂 System 消息
+                for ai_row in ai_rows:
+                    if ai_row.id in processed_ids:
+                        continue
+                    
+                    # 3.1 Check Left Context (Is this a Tail?)
+                    # Lookback 1 message
+                    prev_sql = text("SELECT role FROM history WHERE chat_id = :cid AND id < :aid ORDER BY id DESC LIMIT 1")
+                    prev_res = await session.execute(prev_sql, {"cid": chat_id, "aid": ai_row.id})
+                    prev_row = prev_res.fetchone()
+                    
+                    is_tail = False
+                    if prev_row and prev_row.role == 'assistant':
+                        is_tail = True
+                    
+                    if is_tail:
+                        # [Tail Strategy]
+                        # 这是一个 "掉队" 的后续气泡 (上一条也是 AI)。
+                        # 它的内容理应被合并在 Head 里。
+                        # 如果 Head 已经索引过，我们无法追溯更新 Head (代价太大)。
+                        # 所以策略是：直接静默标记为已处理 (Zero Vector)，不生成独立索引 (避免污染)。
+                        processed_ids.add(ai_row.id)
+                        db_write_ops.append((ai_row.id, "ZERO"))
+                        continue
+
+                    # [Head Strategy]
+                    # 这是由 User 触发的第一条 AI 消息 (Head)。
+                    # 我们需要向后由贪婪抓取所有连续的 AI 消息 (Tails)，合并内容。
+                    
+                    # 3.2 Look Ahead (Find Consequent Tails)
+                    # 限制抓取 10 条，避免无限循环
+                    next_sql = text("""
+                        SELECT id, content, role FROM history 
+                        WHERE chat_id = :cid AND id > :aid 
+                        ORDER BY id ASC LIMIT 10
+                    """)
+                    next_res = await session.execute(next_sql, {"cid": chat_id, "aid": ai_row.id})
+                    next_rows = next_res.fetchall()
+                    
+                    chain_content = [self.sanitize_content(ai_row.content)]
+                    chain_ids = [ai_row.id]
+                    
+                    for nr in next_rows:
+                        if nr.role == 'assistant':
+                            # Found a tail
+                            chain_content.append(self.sanitize_content(nr.content))
+                            chain_ids.append(nr.id)
+                        else:
+                            # Met User/System -> Stop
+                            break
+                            
+                    # Mark all as processed
+                    for cid in chain_ids:
+                        processed_ids.add(cid)
+                        
+                    # 3.3 Look Back (Get User Context)
+                    # 抓取最近的 User 消息 (最多 3 条连续)
                     lb_sql = text("""
                         SELECT role, content FROM history 
                         WHERE chat_id = :cid AND id < :aid 
@@ -177,43 +230,51 @@ class RagService:
                         if prev_msg.role == 'user':
                             prev_content = self.sanitize_content(prev_msg.content)
                             if prev_content:
-                                user_context_parts.insert(0, prev_content) # 插入到开头，保持时序
-                                if len(user_context_parts) >= 3: # Max 3 context
+                                user_context_parts.insert(0, prev_content)
+                                if len(user_context_parts) >= 3: 
                                     break
                         else:
-                            # 遇到非 User 消息 (System/AI)，中断回溯，不仅是跳过，而是视为上一轮结束
                             break
-                    
-                    # 融合构建语义块
-                    # Format: 
-                    # User: ...
-                    # Assistant: ...
+                            
+                    # 3.4 Build Fused Text
+                    merged_ai_content = " ".join([c for c in chain_content if c])
                     
                     fused_text = ""
                     if user_context_parts:
                         user_block = " ".join(user_context_parts)
-                        fused_text = f"User: {user_block}\nAssistant: {ai_content}"
+                        fused_text = f"User: {user_block}\nAssistant: {merged_ai_content}"
                     else:
-                        # Orphan AI (无上文)
-                        fused_text = f"Assistant: {ai_content}"
+                        fused_text = f"Assistant: {merged_ai_content}"
                     
-                    items_to_embed.append(fused_text)
-                    valid_ids.append(ai_row.id)
-                
-                if not items_to_embed:
+                    # Register for embedding
+                    texts_to_embed.append(fused_text)
+                    
+                    # Head gets the vector
+                    db_write_ops.append((ai_row.id, "PENDING")) 
+                    text_map_indices.append(len(db_write_ops) - 1)
+                    
+                    # Tails get ZERO
+                    for tail_id in chain_ids[1:]:
+                        db_write_ops.append((tail_id, "ZERO"))
+
+                if not db_write_ops:
                     return
 
-                # 4. 批量嵌入
-                embeddings = await self._embed_texts(items_to_embed)
+                # 4. Batch Embed
+                embeddings = []
+                if texts_to_embed:
+                    embeddings = await self._embed_texts(texts_to_embed)
                 
-                # 5. [DEBUG] 通知超级管理员
+                # Fill PENDING with vectors
+                real_vectors_map = {idx: vec for idx, vec in zip(text_map_indices, embeddings)}
+                
+                # 5. [DEBUG] Notification
                 try:
                     import core.bot as bot_module
-                    if bot_module.bot:
+                    if bot_module.bot and texts_to_embed:
                         # 构建完整预览 (Max 3500 chars)
                         full_preview = ""
-                        for idx, item in enumerate(items_to_embed):
-                            # 每个条目只取前 100 字符预览，避免过长
+                        for idx, item in enumerate(texts_to_embed):
                             snippet = item.split('\n')[0][:50] + "..." if len(item) > 100 else item
                             full_preview += f"[{idx+1}] {html.escape(snippet)}\n"
                         
@@ -222,26 +283,33 @@ class RagService:
 
                         debug_msg = (
                             f"🔮 <b>RAG Sync: Interaction Mode</b>\n"
-                            f"Chat: <code>{chat_id}</code> | Count: <code>{len(items_to_embed)}</code>\n"
+                            f"Chat: <code>{chat_id}</code> | Turns: <code>{len(texts_to_embed)}</code> (Merged)\n"
                             f"<pre>{full_preview}</pre>"
                         )
-                        
-                        await bot_module.bot.send_message(
-                            chat_id=settings.ADMIN_USER_ID,
-                            text=debug_msg,
-                            parse_mode='HTML'
-                        )
+                        await bot_module.bot.send_message(settings.ADMIN_USER_ID, debug_msg, parse_mode='HTML')
                 except: pass
 
-                # 6. 写入向量表
-                for mid, vector in zip(valid_ids, embeddings):
-                    await session.execute(
-                        text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
-                        {"id": mid, "embedding": json.dumps(vector)} 
-                    )
+                # 6. Write to DB
+                # Prepare Zero Vector
+                zero_vec = [0.0] * 1536 
+                
+                for i, (mid, status) in enumerate(db_write_ops):
+                    final_vec = None
+                    if status == "PENDING":
+                        # Find mapped vector
+                        if i in real_vectors_map:
+                            final_vec = real_vectors_map[i]
+                    elif status == "ZERO":
+                        final_vec = zero_vec
+                        
+                    if final_vec:
+                        await session.execute(
+                            text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
+                            {"id": mid, "embedding": json.dumps(final_vec)} 
+                        )
                 
                 await session.commit()
-                logger.info(f"RAG Sync: Indexed {len(valid_ids)} interactions.")
+                logger.info(f"RAG Sync: Indexed {len(texts_to_embed)} Heads, Skipped {len(db_write_ops) - len(texts_to_embed)} Tails.")
                 
                 if chat_id in self._sync_cooldowns:
                     del self._sync_cooldowns[chat_id]
