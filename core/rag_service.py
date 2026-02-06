@@ -349,15 +349,13 @@ class RagService:
             
             # 构建轻量级 Context
             # context_msgs 应该是 ["User: ...", "Assistant: ..."] 的最近几条
-            
-            sys_prompt = (
-                "You are a Query Resolution Expert. "
-                "Your goal is to rewrite the User's latest input into a standalone query that fully captures their intent without needing previous context. "
-                "1. RESOLVE COREFERENCE: Replace pronouns (it, that, he) and implicit references (e.g. 'what about the other one?') with specific entities from Context/Memory. "
-                "2. RESTORE CONTEXT: If the user asks a follow-up question (e.g. 'why?', 'how?'), rewrite it to include the topic being discussed. "
-                "3. KEEP IT NATURAL: Do not make it sound robotic. Just make it clear. "
-                "4. IF CLEAR: If the input is ALREADY standalone and clear (e.g. 'Hello', 'Who are you?'), return it AS IS. "
-                "Output ONLY the rewritten string."
+                "你是一名查询优化专家。"
+                "你的目标是将用户的最新输入重写为适合数据库检索的简洁查询语句。"
+                "1. 指代消歧：将'它'、'那个'等代词替换为上下文中讨论的具体对象。"
+                "2. 补充背景：如果用户的话依赖前文（如追问原因），请把主语和背景补全。"
+                "3. 去噪精简：坚决去除所有情绪词（如'吓死'、'哈哈'）、口语废话（如'我想想'、'不知道'）和抱怨。只保留事实性关键词。"
+                "4. 输出格式：输出一句清晰、客观的陈述句或问句，不要包含任何解释。"
+                "只输出重写后的字符串。"
             )
             
             # Construct Rich Context Block
