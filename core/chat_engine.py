@@ -216,17 +216,13 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     dynamic_summary = await summary_service.get_summary(chat_id)
 
-    # --- RAG Integration & Core Locking ---
-    # 按照指示，整个生成过程需要在锁内执行，以保证 Strict Serialization
+        # --- RAG Integration & Core Locking ---
+        # 按照指示，整个生成过程需要在锁内执行，以保证 Strict Serialization
     async with CHAT_LOCKS[chat_id]:
         rag_context = ""
-        try:
-            # 1. 贪婪补录 (Lazy Full-Sync)
-            # 只要进来了，就顺便把该群欠的债全补上
-            await rag_service.sync_historic_embeddings(chat_id)
-        except Exception as e:
-            logger.error(f"RAG Sync Error: {e}")
-
+        # [RAG Sync Removed from Hot Path]
+        # sync_historic_embeddings is now deprecated and moved to background ETL task.
+        
         # Token limit check
         target_tokens = safe_int_config(
             configs.get("history_tokens"),

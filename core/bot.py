@@ -74,8 +74,7 @@ async def post_init(application: Application):
     # 注册 NewsPush Service 定时任务
     # ---------------------------------------------------------
     if application.job_queue:
-        # 每 3600 秒 (1小时) 运行一次
-        # first=60: 启动后 60 秒首次运行
+        # 1. NewsPush (Every 1h)
         application.job_queue.run_repeating(
             news_push_service.run_push_loop, 
             interval=3600, 
@@ -83,8 +82,22 @@ async def post_init(application: Application):
             name="news_push_loop"
         )
         logger.info("NewsPush: Scheduler registered (Interval: 3600s)")
+
+        # 2. RAG Background Sync (Every 5 min)
+        # Wrapper to match JobQueue signature
+        async def rag_sync_wrapper(context):
+            from core.rag_service import rag_service
+            await rag_service.run_background_sync()
+
+        application.job_queue.run_repeating(
+            rag_sync_wrapper, 
+            interval=300, 
+            first=30, 
+            name="rag_sync_loop"
+        )
+        logger.info("RAG Sync: Scheduler registered (Interval: 300s)")
     else:
-        logger.warning("NewsPush: JobQueue not available!")
+        logger.warning("JobQueue not available! RAG & NewsPush will not auto-run.")
 
 def run_bot():
     """启动 Bot"""

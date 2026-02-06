@@ -46,6 +46,53 @@ class RagService:
             
         return self._client
 
+    async def _get_summary_model(self):
+        """获取配置的摘要/清洗模型"""
+        configs = await config_service.get_all_settings()
+        # 优先使用 summary_model_name, 降级使用 model_name
+        model = configs.get("summary_model_name") or configs.get("model_name")
+        return model
+
+    async def denoise_interaction(self, user_content: str, ai_content: str) -> str:
+        """
+        [ETL Phase 1] 使用 LLM 进行语义降噪
+        将 User+AI 的完整对话轮次转化为高密度的客观事实。
+        """
+        model_name = await self._get_summary_model()
+        if not model_name:
+            return f"User asked: {user_content}\nAI answered: {ai_content}"
+
+        sys_prompt = (
+            "你是一名 RAG 知识库构建专家。你的任务是将用户的提问和 AI 的回复清洗为一条“高密度”的事实记录。\n"
+            "规则：\n"
+            "1. **提取核心**：提取用户遇到的具体问题（报错信息、代码上下文）和 AI 给出的关键建议。\n"
+            "2. **去除噪音**：彻底删除所有寒暄（“你好”、“谢谢”）、情绪词（“烦死了”）、口语废话（“那个...”）。\n"
+            "3. **指代消歧**：如果用户说“它挂了”，请根据上下文（如果有）或直接保留原词但尝试补充背景。\n"
+            "4. **格式**：输出为第三人称陈述句。例如：“用户询问 Docker 启动失败 (Exit 137)。AI 解释为 OOM 并建议增加 Swap。”\n"
+            "5. **只输出结果**，不要包含任何前缀或解释。"
+        )
+
+        user_prompt = f"User Input:\n{user_content}\n\nAI Response:\n{ai_content}"
+
+        try:
+            client = await self._get_client()
+            resp = await client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=300,
+                temperature=0.3
+            )
+            if resp.choices and resp.choices[0].message.content:
+                return resp.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Denoise failed: {e}")
+        
+        # Fallback
+        return f"User: {user_content}\nAI: {ai_content}"
+
     def sanitize_content(self, text: str) -> str:
         """
         清洗内容：
@@ -170,227 +217,246 @@ class RagService:
             logger.error(f"RAG Migration failed: {e}")
             # Do not re-raise, allow sync to proceed (fallback)
 
-    async def sync_historic_embeddings(self, chat_id: int):
+    async def run_background_sync(self):
         """
-        懒惰全量同步 (Lazy Full-Sync) - Interaction-Centric Mode
-        只索引 AI 消息，并自动融合前序用户问题 (User Context + AI Response)。
+        [ETL Core] 后台同步循环 (The "Cron")
+        策略: Context Barrier + Turn-based Assembly + Denoising
+        只处理已经跌出活跃窗口 (Tier 1 -> Tier 2) 的消息。
         """
-        configs = await config_service.get_all_settings()
+        logger.info("RAG ETL: Starting background sync cycle...")
         
-        # 动态读取冷却时间
-        cooldown = self.SYNC_COOLDOWN_SECONDS
-        try:
-            if val := configs.get("rag_sync_cooldown"):
-                cooldown = int(val)
-        except: pass
-
-        # 1. 熔断检查
-        last_fail = self._sync_cooldowns.get(chat_id, 0)
-        if time.time() - last_fail < cooldown:
-            return
-
+        # 1. 获取所有活跃的 Chat ID
+        # 简单起见，从 Recent History 找，或者遍历所有 Chat 配置。
+        # 这里先只扫描最近活跃的 Top 20 Chat
         async for session in get_db_session():
             try:
-            try:
-                # 0. Migration Check (Sync-time migration)
-                await self._check_and_migrate_status(session, chat_id)
-
-                # 2. 找出所有未嵌入的 AI 消息 (Anchors)
-                # 使用 rag_status 判断是否已处理
-                stmt = text("""
-                    SELECT h.id, h.role, h.content 
-                    FROM history h
-                    LEFT JOIN rag_status s ON h.id = s.msg_id
-                    WHERE h.chat_id = :chat_id 
-                      AND h.role = 'assistant'
-                      AND s.msg_id IS NULL
-                      AND h.content IS NOT NULL
-                      AND h.content != ''
-                      AND h.content NOT LIKE '[%: Processing...]'
-                    LIMIT 50
-                """)
+                # Find chats with recent activity
+                recent_chats_res = await session.execute(
+                    text("SELECT DISTINCT chat_id FROM history ORDER BY id DESC LIMIT 20")
+                )
+                chat_ids = [r.chat_id for r in recent_chats_res.fetchall()]
                 
-                result = await session.execute(stmt, {"chat_id": chat_id})
-                ai_rows = result.fetchall()
-                
-                if not ai_rows:
-                    if chat_id in self._sync_cooldowns:
-                        del self._sync_cooldowns[chat_id]
-                    return
-
-                logger.info(f"RAG Sync: Found {len(ai_rows)} AI anchors for chat {chat_id}")
-
-                # 3. Context Fusion Loop (Sequential Merging)
-                db_write_ops = [] # list of (id, vector_or_placeholder)
-                texts_to_embed = [] # list of strings
-                text_map_indices = [] # indices in db_write_ops that need embedding filling
-                
-                processed_ids = set() # ids handled in this batch (as Head or Tail)
-
-                for ai_row in ai_rows:
-                    if ai_row.id in processed_ids:
-                        continue
+                for chat_id in chat_ids:
+                    await self._process_chat_etl(session, chat_id)
                     
-                    # 3.1 Check Left Context (Is this a Tail?)
-                    # Lookback 1 message
-                    prev_sql = text("SELECT role FROM history WHERE chat_id = :cid AND id < :aid ORDER BY id DESC LIMIT 1")
-                    prev_res = await session.execute(prev_sql, {"cid": chat_id, "aid": ai_row.id})
-                    prev_row = prev_res.fetchone()
-                    
-                    is_tail = False
-                    if prev_row and prev_row.role == 'assistant':
-                        is_tail = True
-                    
-                    if is_tail:
-                        # [Tail Strategy]
-                        # 这是一个 "掉队" 的后续气泡 (上一条也是 AI)。
-                        # 它的内容理应被合并在 Head 里。
-                        # 如果 Head 已经索引过，我们无法追溯更新 Head (代价太大)。
-                        # 所以策略是：直接静默标记为已处理 (Zero Vector)，不生成独立索引 (避免污染)。
-                        processed_ids.add(ai_row.id)
-                        db_write_ops.append((ai_row.id, "ZERO"))
-                        continue
-
-                    # [Head Strategy]
-                    # 这是由 User 触发的第一条 AI 消息 (Head)。
-                    # 我们需要向后由贪婪抓取所有连续的 AI 消息 (Tails)，合并内容。
-                    
-                    # 3.2 Look Ahead (Find Consequent Tails)
-                    # 限制抓取 10 条，避免无限循环
-                    next_sql = text("""
-                        SELECT id, content, role FROM history 
-                        WHERE chat_id = :cid AND id > :aid 
-                        ORDER BY id ASC LIMIT 10
-                    """)
-                    next_res = await session.execute(next_sql, {"cid": chat_id, "aid": ai_row.id})
-                    next_rows = next_res.fetchall()
-                    
-                    chain_content = [self.sanitize_content(ai_row.content)]
-                    chain_ids = [ai_row.id]
-                    
-                    for nr in next_rows:
-                        if nr.role == 'assistant':
-                            # Found a tail
-                            chain_content.append(self.sanitize_content(nr.content))
-                            chain_ids.append(nr.id)
-                        else:
-                            # Met User/System -> Stop
-                            break
-                            
-                    # Mark all as processed
-                    for cid in chain_ids:
-                        processed_ids.add(cid)
-                        
-                    # 3.3 Look Back (Get User Context)
-                    # 抓取最近的 User 消息 (最多 3 条连续)
-                    lb_sql = text("""
-                        SELECT role, content FROM history 
-                        WHERE chat_id = :cid AND id < :aid 
-                        ORDER BY id DESC LIMIT 5
-                    """)
-                    lb_res = await session.execute(lb_sql, {"cid": chat_id, "aid": ai_row.id})
-                    lb_rows = lb_res.fetchall()
-                    
-                    user_context_parts = []
-                    for prev_msg in lb_rows:
-                        if prev_msg.role == 'user':
-                            prev_content = self.sanitize_content(prev_msg.content)
-                            if prev_content:
-                                user_context_parts.insert(0, prev_content)
-                                if len(user_context_parts) >= 3: 
-                                    break
-                        else:
-                            break
-                            
-                    # 3.4 Build Fused Text
-                    merged_ai_content = " ".join([c for c in chain_content if c])
-                    
-                    fused_text = ""
-                    if user_context_parts:
-                        user_block = " ".join(user_context_parts)
-                        fused_text = f"User: {user_block}\nAssistant: {merged_ai_content}"
-                    else:
-                        fused_text = f"Assistant: {merged_ai_content}"
-                    
-                    # Register for embedding
-                    texts_to_embed.append(fused_text)
-                    
-                    # Head gets the vector
-                    db_write_ops.append((ai_row.id, "PENDING")) 
-                    text_map_indices.append(len(db_write_ops) - 1)
-                    
-                    # Tails get ZERO
-                    for tail_id in chain_ids[1:]:
-                        db_write_ops.append((tail_id, "ZERO"))
-
-                if not db_write_ops:
-                    return
-
-                # 4. Batch Embed
-                embeddings = []
-                if texts_to_embed:
-                    embeddings = await self._embed_texts(texts_to_embed)
-                
-                # Fill PENDING with vectors
-                real_vectors_map = {idx: vec for idx, vec in zip(text_map_indices, embeddings)}
-                
-                # 5. [DEBUG] Notification
-                try:
-                    import core.bot as bot_module
-                    if bot_module.bot and texts_to_embed:
-                        # 构建完整预览 (Max 3500 chars)
-                        full_preview = ""
-                        for idx, item in enumerate(texts_to_embed):
-                            snippet = item.split('\n')[0][:50] + "..." if len(item) > 100 else item
-                            full_preview += f"[{idx+1}] {html.escape(snippet)}\n"
-                        
-                        if len(full_preview) > 3500:
-                            full_preview = full_preview[:3500] + "\n... (Truncated)"
-
-                        debug_msg = (
-                            f"🔮 <b>RAG Sync: Interaction Mode</b>\n"
-                            f"Chat: <code>{chat_id}</code> | Turns: <code>{len(texts_to_embed)}</code> (Merged)\n"
-                            f"<pre>{full_preview}</pre>"
-                        )
-                        await bot_module.bot.send_message(settings.ADMIN_USER_ID, debug_msg, parse_mode='HTML')
-                except: pass
-
-                # 6. Write to DB
-                # PENDING -> Head (Vector + Status)
-                # ZERO -> Tail (Status Only)
-                
-                for i, (mid, status) in enumerate(db_write_ops):
-                    final_vec = None
-                    rag_status_val = "TAIL"
-                    
-                    if status == "PENDING":
-                        # Find mapped vector
-                        if i in real_vectors_map:
-                            final_vec = real_vectors_map[i]
-                            rag_status_val = "HEAD"
-                    
-                    # 1. Update Status Table (Always)
-                    # Note: Using INSERT OR IGNORE just in case concurrency
-                    await session.execute(
-                        text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, :status)"),
-                        {"id": mid, "cid": chat_id, "status": rag_status_val}
-                    )
-                        
-                    # 2. Insert Vector (Only if Head/Real)
-                    if final_vec:
-                        await session.execute(
-                            text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
-                            {"id": mid, "embedding": json.dumps(final_vec)} 
-                        )
-                
-                await session.commit()
-                logger.info(f"RAG Sync: Indexed {len(texts_to_embed)} Heads, Skipped {len(db_write_ops) - len(texts_to_embed)} Tails.")
-                
-                if chat_id in self._sync_cooldowns:
-                    del self._sync_cooldowns[chat_id]
             except Exception as e:
-                logger.error(f"RAG Sync failed for chat {chat_id}: {e}")
-                self._sync_cooldowns[chat_id] = time.time()
+                logger.error(f"RAG ETL Global Loop failed: {e}")
+
+    async def _process_chat_etl(self, session, chat_id: int):
+        """处理单个 Chat 的 ETL"""
+        from core.history_service import history_service
+        
+        try:
+            # 1. 计算 Context Barrier (活跃窗口边界)
+            configs = await config_service.get_all_settings()
+            max_tokens = int(configs.get("history_tokens", 4000)) # Default 4k
+            
+            # 获取倒序消息来计算 Token 累加
+            stmt_all = text("SELECT id, role, content, message_type FROM history WHERE chat_id=:cid ORDER BY id DESC LIMIT 200")
+            res_all = await session.execute(stmt_all, {"cid": chat_id})
+            recent_msgs = res_all.fetchall()
+            
+            if not recent_msgs: 
+                return
+
+            active_window_start_id = 0
+            curr_tokens = 0
+            
+            # 从新到旧累加 Token
+            for msg in recent_msgs:
+                # 简单估算
+                t_count = len(msg.content or "") // 3 + 10 
+                curr_tokens += t_count
+                if curr_tokens >= max_tokens:
+                    active_window_start_id = msg.id
+                    break
+            
+            # 如果没填满窗口，那所有消息都在 T1，不处理
+            if active_window_start_id == 0 and len(recent_msgs) < 200:
+                # 只有当消息很少时才可能发生。如果消息很多但 active_window_start_id 还是 0 (意味着 200条都没填满?)
+                # 这种情况下，取最老的一条作为边界，或者暂不处理
+                if curr_tokens < max_tokens:
+                    return
+
+            if active_window_start_id == 0:
+                # 200条还不够填满？那边界就是第200条
+                active_window_start_id = recent_msgs[-1].id
+
+            # 2. 扫描 T2 区 (ID < active_window_start_id) 中的未处理项
+            # 条件: 是 Assistant 消息 (Turn End), 且 rag_status 为空
+            # 且不包含 'Processing...'
+            stmt_candidates = text("""
+                SELECT h.id 
+                FROM history h
+                LEFT JOIN rag_status s ON h.id = s.msg_id
+                WHERE h.chat_id = :cid
+                  AND h.id < :barrier
+                  AND h.role = 'assistant'
+                  AND s.msg_id IS NULL
+                  AND h.content NOT LIKE '[%: Processing...]'
+                ORDER BY h.id ASC
+                LIMIT 10
+            """)
+            
+            cand_res = await session.execute(stmt_candidates, {"cid": chat_id, "barrier": active_window_start_id})
+            candidate_ids = [r.id for r in cand_res.fetchall()]
+            
+            if not candidate_ids:
+                return
+
+            logger.info(f"RAG ETL: Chat {chat_id} has {len(candidate_ids)} candidates falling out of context (barrier: {active_window_start_id}).")
+
+            # 3. Process each Candidate (Turn Assembly)
+            for anchor_id in candidate_ids:
+                await self._process_single_turn(session, chat_id, anchor_id)
+                
+        except Exception as e:
+            logger.error(f"RAG ETL failed for chat {chat_id}: {e}")
+
+    async def _process_single_turn(self, session, chat_id: int, anchor_id: int):
+        """
+        处理单个交互轮次
+        anchor_id 是 AI 的一条消息 ID。需向前/向后拼装完整轮次。
+        """
+        # 3.1 Gather AI Block (Backwards & Forwards)
+        # 我们的 Anchor 是 Candidate 扫出来的，可能是 AI Block 的中间某一条。
+        # 但我们之前逻辑是：Candidate 是 "Unprocessed Assistant Msg".
+        # 只要我们处理完标记了，就不会重复扫。
+        
+        # 这里的策略：以 Anchor 为核心，向后找 AI (直到 User), 向前找 AI (直到 User) 组成 AI Block.
+        # 然后再向前找 User 组成 User Block.
+        
+        # 简化策略: 
+        # 1. Anchor 必定是 AI。
+        # 2. 向前找连续 AI -> 合并
+        # 3. 再向前找连续 User -> 合并为 User Block
+        
+        # Look back for AI chain start
+        # 其实更简单的做法是：每次只处理 AI Block 的**最后一条**作为 Head？
+        # 不行，因为我们扫出的是 "所有未处理的 AI"。
+        # 如果一个 AI Block 有 3 条，我们会扫出 3 个 Candidate。
+        # 我们处理第一个时，如果不把后面两个标记掉，下次循环还会扫到。
+        
+        # 所以：一旦处理，必须把整个 Block 的 ID 都标记好。
+        
+        # Fetch surrounding messages (Window 20 is enough for a turn)
+        stmt_surround = text("""
+            SELECT id, role, content FROM history 
+            WHERE chat_id=:cid AND id BETWEEN :low AND :high
+            ORDER BY id ASC
+        """)
+        rows = (await session.execute(stmt_surround, {"cid": chat_id, "low": anchor_id - 10, "high": anchor_id + 5})).fetchall()
+        
+        # Find Anchor index
+        anchor_idx = -1
+        for i, r in enumerate(rows):
+            if r.id == anchor_id:
+                anchor_idx = i
+                break
+        
+        if anchor_idx == -1: return # Should not happen
+
+        # Expand AI Block
+        ai_ids = [anchor_id]
+        ai_content = [rows[anchor_idx].content]
+        
+        # Look forward (Next is AI?)
+        curr = anchor_idx + 1
+        while curr < len(rows) and rows[curr].role == 'assistant':
+            ai_ids.append(rows[curr].id)
+            ai_content.append(rows[curr].content)
+            curr += 1
+            
+        # Look backward (Prev is AI?)
+        curr = anchor_idx - 1
+        while curr >= 0 and rows[curr].role == 'assistant':
+            ai_ids.insert(0, rows[curr].id)
+            ai_content.insert(0, rows[curr].content)
+            curr -= 1
+            
+        # Update Anchor to be the LAST ID of the AI Block (Standard Convention)
+        real_head_id = ai_ids[-1]
+        
+        # 如果 real_head_id 已经被处理过(在 rag_status 里)，那整个 Block 都跳过
+        # (check DB)
+        chk = await session.execute(text("SELECT 1 FROM rag_status WHERE msg_id=:mid"), {"mid": real_head_id})
+        if chk.scalar():
+            # Mark curent anchor as SKIPPED just in case
+             if anchor_id != real_head_id:
+                 await session.execute(text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, 'SKIPPED')"), 
+                                       {"id": anchor_id, "cid": chat_id})
+                 await session.commit()
+             return
+
+        # Look backward for User Block (User Question)
+        # Start searching from before the first AI msg
+        user_ids = []
+        user_content = []
+        
+        search_idx = -1
+        # Find index of first AI msg in 'rows'
+        first_ai_id = ai_ids[0]
+        for i, r in enumerate(rows):
+            if r.id == first_ai_id:
+                search_idx = i - 1
+                break
+        
+        while search_idx >= 0 and rows[search_idx].role == 'user':
+            user_ids.insert(0, rows[search_idx].id) # Prepend
+            user_content.insert(0, rows[search_idx].content)
+            search_idx -= 1
+            
+        # Assembly
+        full_user_text = "\n".join(user_content)
+        full_ai_text = "\n".join(ai_content)
+        
+        if not full_user_text:
+            # Orphan AI response? Maybe system msg before?
+            full_user_text = "(Context missing or System trigger)"
+            
+        # 4. Denoise
+        denoised_text = await self.denoise_interaction(full_user_text, full_ai_text)
+        
+        # 5. Embed
+        vecs = await self._embed_texts([denoised_text])
+        if not vecs: return
+        vector = vecs[0]
+        
+        # 6. Store
+        # Head (Last AI ID) -> HEAD + Vector + Denoised
+        # Others -> TAIL/SKIPPED
+        
+        # Head
+        await session.execute(
+            text("""
+                INSERT OR REPLACE INTO rag_status (msg_id, chat_id, status, denoised_content) 
+                VALUES (:id, :cid, 'HEAD', :content)
+            """), 
+            {"id": real_head_id, "cid": chat_id, "content": denoised_text}
+        )
+        
+        await session.execute(
+            text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :vec)"),
+            {"id": real_head_id, "vec": json.dumps(vector)}
+        )
+        
+        # Tails (Other AI parts)
+        for aid in ai_ids:
+            if aid != real_head_id:
+                await session.execute(
+                    text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, 'TAIL')"),
+                    {"id": aid, "cid": chat_id}
+                )
+                
+        # Users (Linked parts)
+        for uid in user_ids:
+            await session.execute(
+                text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, 'TAIL')"),
+                {"id": uid, "cid": chat_id}
+            )
+
+        await session.commit()
+        logger.info(f"RAG ETL: Indexed Turn {real_head_id} (User: {len(user_ids)}, AI: {len(ai_ids)})")
 
     async def contextualize_query(self, query_text: str, conversation_history: str, long_term_summary: str = "") -> str:
         """
