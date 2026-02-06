@@ -313,7 +313,7 @@ class RagService:
                 
                 if chat_id in self._sync_cooldowns:
                     del self._sync_cooldowns[chat_id]
-        except Exception as e:
+            except Exception as e:
                 logger.error(f"RAG Sync failed for chat {chat_id}: {e}")
                 self._sync_cooldowns[chat_id] = time.time()
 
