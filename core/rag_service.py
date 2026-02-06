@@ -835,61 +835,74 @@ class RagService:
 
     async def get_vector_stats(self, chat_id: int) -> Dict[str, Any]:
         """
-        获取指定会话的向量索引统计
+        获取指定会话的 RAG 统计 (v2)
+        分类:
+        1. Knowledge Base (Indexed): 已降噪并入库的 Facts.
+        2. Pending (ETL Queue): 已跌出上下文窗口，等待降噪的.
+        3. Active (Hot): 仍在上下文窗口内，无需索引的.
         """
         async for session in get_db_session():
             try:
-                # 统计：
-                # 1. Total Eligible Heads: 仅统计 "Head" (前一条不是 AI 的 AI 消息)
-                # 2. Indexed Heads: 仅统计非 Zero Vector 的索引
-                
-                # 构造 Zero Vector JSON 字符串用于排除
-                zero_vec_json = json.dumps([0.0] * 1536)
-                
-                # SQLite 复杂统计 (Count Heads)
-                # 使用嵌套查询判断 "Is Head"
-                # (h.role='assistant' AND (prev.role IS NULL OR prev.role != 'assistant'))
-                
-                # Total Heads (分母)
-                stmt_total = text("""
-                    SELECT COUNT(*) FROM history h
-                    WHERE h.chat_id = :chat_id 
-                      AND h.role = 'assistant'
-                      AND h.content IS NOT NULL
-                      AND h.content != ''
-                      AND h.content NOT LIKE '[%: Processing...]'
-                      AND (
-                          SELECT role FROM history prev 
-                          WHERE prev.chat_id = :chat_id AND prev.id < h.id 
-                          ORDER BY prev.id DESC LIMIT 1
-                      ) IS NOT 'assistant'
-                """)
-                
-                # Indexed Heads (分子)
-                # 使用 rag_status 表统计 (Status='HEAD')
-                # 这代表真正产生向量并已被索引的消息
-                stmt_indexed = text("""
-                    SELECT COUNT(*) FROM rag_status
-                    WHERE chat_id = :chat_id AND status = 'HEAD'
-                """)
-                
-                # Execute
-                res_total = await session.execute(stmt_total, {"chat_id": chat_id})
-                total = res_total.scalar() or 0
-                
-                res_indexed = await session.execute(stmt_indexed, {"chat_id": chat_id})
-                indexed = res_indexed.scalar() or 0
-                
-                # 检查冷却状态
+                # 1. 计算 Context Barrier (简单估算，避免过度消耗)
+                configs = await config_service.get_all_settings()
+                max_tokens = int(configs.get("history_tokens", 4000))
+
+                # Scan recent messages to find barrier
+                stmt_recent = text("SELECT id, content FROM history WHERE chat_id=:cid ORDER BY id DESC LIMIT 500")
+                recent_msgs = (await session.execute(stmt_recent, {"cid": chat_id})).fetchall()
+
+                curr_tokens = 0
+                barrier_id = 0
+                active_count = 0
+
+                for msg in recent_msgs:
+                    t_count = len(msg.content or "") // 3 + 10
+                    curr_tokens += t_count
+                    if curr_tokens >= max_tokens:
+                        barrier_id = msg.id
+                        break
+                    active_count += 1
+
+                if barrier_id == 0 and recent_msgs:
+                    # History shorter than window
+                    barrier_id = 0 # All active
+
+                # 2. Count Indexed (HEAD)
+                stmt_indexed = text("SELECT COUNT(*) FROM rag_status WHERE chat_id = :cid AND status = 'HEAD'")
+                indexed_count = (await session.execute(stmt_indexed, {"cid": chat_id})).scalar() or 0
+
+                # 3. Count Pending (Assistant Msgs < Barrier NOT IN rag_status)
+                pending_count = 0
+                if barrier_id > 0:
+                    stmt_pending = text("""
+                        SELECT COUNT(*) FROM history h
+                        LEFT JOIN rag_status s ON h.id = s.msg_id
+                        WHERE h.chat_id = :cid
+                          AND h.id < :barrier
+                          AND h.role = 'assistant'
+                          AND s.msg_id IS NULL
+                          AND h.content NOT LIKE '[%: Processing...]'
+                    """)
+                    pending_count = (await session.execute(stmt_pending, {"cid": chat_id, "barrier": barrier_id})).scalar() or 0
+
+                # 4. Count Active (Approximate)
+                # Just return a status string or boolean?
+                # Let's count Assistant msgs in active window for completeness
+
+                # Re-query simplified for active assistant count if needed, or just omit.
+                # User cares about: "How many indexed?" vs "How many waiting?"
+
+                # Cooldown
                 cooldown_left = 0
                 if chat_id in self._sync_cooldowns:
                      passed = time.time() - self._sync_cooldowns[chat_id]
                      if passed < self.SYNC_COOLDOWN_SECONDS:
                          cooldown_left = int(self.SYNC_COOLDOWN_SECONDS - passed)
-                
+
                 return {
-                    "total_eligible": total,
-                    "indexed": indexed,
+                    "indexed": indexed_count,
+                    "pending": pending_count,
+                    "active_window_size": active_count, # Msgs in active window
                     "cooldown_left": cooldown_left
                 }
             except Exception as e:

@@ -105,19 +105,21 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from core.rag_service import rag_service
     rag_stats = await rag_service.get_vector_stats(chat.id)
     
-    rag_total = rag_stats.get("total_eligible", 0)
     rag_indexed = rag_stats.get("indexed", 0)
+    rag_pending = rag_stats.get("pending", 0)
+    rag_active = rag_stats.get("active_window_size", 0)
     rag_cooldown = rag_stats.get("cooldown_left", 0)
-    rag_percent = int((rag_indexed / rag_total) * 100) if rag_total > 0 else 0
     
     rag_status_str = "Idle"
     if rag_cooldown > 0:
-        rag_status_str = f"🥶 Cooling Down ({rag_cooldown}s)"
+        rag_status_str = f"🥶 Cooling ({rag_cooldown}s)"
+    elif rag_pending > 0:
+        rag_status_str = f"🚜 Processing ({rag_pending} pending)"
     
     # 简单的锁状态检查 (Non-blocking)
     from core.chat_engine import CHAT_LOCKS
     if chat.id in CHAT_LOCKS and CHAT_LOCKS[chat.id].locked():
-        rag_status_str += " (Locked/Syncing)"
+        rag_status_str += " (Locked)"
 
     msg = (
         f"📊 <b>Session Statistics</b>\n\n"
@@ -129,9 +131,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📥 <b>Archiving Buffer</b>:\n"
         f"<code>{make_bar(buffer_tokens, T)} {buffer_percent}%</code>\n"
         f"({buffer_tokens} / {T} tokens)\n\n"
-        f"🔮 <b>RAG Index</b>:\n"
-        f"Turns Indexed: <code>{rag_indexed} / {rag_total}</code> ({rag_percent}%)\n"
-        f"Status: {rag_status_str}\n\n"
+        f"📚 <b>Knowledge Base (RAG)</b>:\n"
+        f"• <b>Facts Indexed:</b> <code>{rag_indexed}</code>\n"
+        f"• <b>Pending ETL:</b> <code>{rag_pending}</code>\n"
+        f"• <b>Active Window:</b> ~{rag_active} msgs (Ignored)\n"
+        f"• <b>Status:</b> {rag_status_str}\n\n"
         f"🕒 Last Summary: {time_str}"
     )
     
