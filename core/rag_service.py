@@ -313,16 +313,15 @@ class RagService:
                 
                 if chat_id in self._sync_cooldowns:
                     del self._sync_cooldowns[chat_id]
-
-            except Exception as e:
+        except Exception as e:
                 logger.error(f"RAG Sync failed for chat {chat_id}: {e}")
                 self._sync_cooldowns[chat_id] = time.time()
 
-    async def contextualize_query(self, query_text: str, context_msgs: List[str]) -> str:
+    async def contextualize_query(self, query_text: str, conversation_history: str, long_term_summary: str = "") -> str:
         """
         [Query Rewriting]
-        使用摘要模型快速重写查询，消除指代不明 (Resolution of Coreference)。
-        只在 query 较短或包含代词时触发 (由调用方控制，或在此处简单判断)。
+        使用摘要模型快速重写查询，消除指代不明。
+        现在接收与主模型完全一致的 Full Context (Active Window + Summary)。
         """
         # [DEBUG] Log entry
         logger.info(f"RAG Rewriter: Input='{query_text}' (Len: {len(query_text)})")
@@ -350,25 +349,31 @@ class RagService:
             
             # 构建轻量级 Context
             # context_msgs 应该是 ["User: ...", "Assistant: ..."] 的最近几条
-            context_block = "\n".join(context_msgs[-4:]) # 只看最近 2 轮
             
             sys_prompt = (
                 "You are a Query Resolution Expert. "
                 "Your goal is to rewrite the User's latest input into a standalone query that fully captures their intent without needing previous context. "
-                "1. RESOLVE COREFERENCE: Replace pronouns (it, that, he) and implicit references (e.g. 'what about the other one?') with specific entities from Context. "
+                "1. RESOLVE COREFERENCE: Replace pronouns (it, that, he) and implicit references (e.g. 'what about the other one?') with specific entities from Context/Memory. "
                 "2. RESTORE CONTEXT: If the user asks a follow-up question (e.g. 'why?', 'how?'), rewrite it to include the topic being discussed. "
                 "3. KEEP IT NATURAL: Do not make it sound robotic. Just make it clear. "
                 "4. IF CLEAR: If the input is ALREADY standalone and clear (e.g. 'Hello', 'Who are you?'), return it AS IS. "
                 "Output ONLY the rewritten string."
             )
             
+            # Construct Rich Context Block
+            full_context_block = ""
+            if long_term_summary:
+                full_context_block += f"=== Long-term Memory ===\n{long_term_summary}\n\n"
+            
+            full_context_block += f"=== Active Conversation ===\n{conversation_history}"
+
             resp = await client.chat.completions.create(
                 model=summary_model,
                 messages=[
                     {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": f"Conversation Context:\n{context_block}\n\nUser Input to Rewrite:\n{query_text}"}
+                    {"role": "user", "content": f"{full_context_block}\n\nUser Input to Rewrite:\n{query_text}"}
                 ],
-                max_tokens=150,
+                max_tokens=200,
                 temperature=0.3
             )
             
@@ -722,18 +727,20 @@ class RagService:
                 
                 # Indexed Heads (分子)
                 # 必须同时满足: 在 vec 表中 AND 不是 Zero Vector
+                # String comparison of JSON floating point is fragile.
+                # Use LIKE to exclude vectors starting with series of zeros.
                 stmt_indexed = text("""
                     SELECT COUNT(*) FROM history_vec v
                     JOIN history h ON v.rowid = h.id
                     WHERE h.chat_id = :chat_id
-                      AND v.embedding != :zero_vec
+                      AND v.embedding NOT LIKE '[0.0, 0.0, 0.0,%'
                 """)
                 
                 # Execute
                 res_total = await session.execute(stmt_total, {"chat_id": chat_id})
                 total = res_total.scalar() or 0
                 
-                res_indexed = await session.execute(stmt_indexed, {"chat_id": chat_id, "zero_vec": zero_vec_json})
+                res_indexed = await session.execute(stmt_indexed, {"chat_id": chat_id})
                 indexed = res_indexed.scalar() or 0
                 
                 # 检查冷却状态
