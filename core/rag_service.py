@@ -264,8 +264,9 @@ class RagService:
             
             # 从新到旧累加 Token
             for msg in recent_msgs:
-                # 简单估算
-                t_count = len(msg.content or "") // 3 + 10 
+                # 使用标准 Token 计算 (Unified with SummaryService)
+                # 确保 active_window 的计算标准与 Stats/Summary 完全一致
+                t_count = history_service.count_tokens(msg.content or "")
                 curr_tokens += t_count
                 if curr_tokens >= max_tokens:
                     active_window_start_id = msg.id
@@ -851,7 +852,9 @@ class RagService:
         """
         async for session in get_db_session():
             try:
-                # 1. 计算 Context Barrier (简单估算，避免过度消耗)
+                # 1. 计算 Context Barrier (Unified with SummaryService)
+                from core.history_service import history_service
+                
                 configs = await config_service.get_all_settings()
                 max_tokens = int(configs.get("history_tokens", 4000))
 
@@ -864,7 +867,7 @@ class RagService:
                 active_count = 0
 
                 for msg in recent_msgs:
-                    t_count = len(msg.content or "") // 3 + 10
+                    t_count = history_service.count_tokens(msg.content or "")
                     curr_tokens += t_count
                     if curr_tokens >= max_tokens:
                         barrier_id = msg.id
