@@ -449,10 +449,7 @@ class RagService:
         # [DEBUG] Log entry
         logger.info(f"RAG Rewriter: Input='{query_text}' (Len: {len(query_text)})")
 
-        # 简单启发式过滤：如果很长，可能不需要重写 (省钱)
-        if len(query_text) > 40:
-            logger.info("RAG Rewriter: Skipped (Length > 40)")
-            return query_text
+
 
         try:
             configs = await config_service.get_all_settings()
