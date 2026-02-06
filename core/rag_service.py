@@ -353,24 +353,22 @@ class RagService:
             context_block = "\n".join(context_msgs[-4:]) # 只看最近 2 轮
             
             sys_prompt = (
-                "You are a helpful assistant. "
-                "Read the conversation context and the user's latest input. "
-                "If the input is vague (e.g., uses 'it', 'this', 'that', 'why') or depends on context, "
-                "rewrite it into a standalone sentence that clearly expresses the user's intent. "
-                "If the input is already clear, emotional (e.g., 'haha', 'love you'), or meaningless, return it EXACTLY as is. "
-                "Do NOT explain. Output ONLY the rewritten string."
+                "You are a Query Resolution Expert. "
+                "Your goal is to rewrite the User's latest input into a standalone query that fully captures their intent without needing previous context. "
+                "1. RESOLVE COREFERENCE: Replace pronouns (it, that, he) and implicit references (e.g. 'what about the other one?') with specific entities from Context. "
+                "2. RESTORE CONTEXT: If the user asks a follow-up question (e.g. 'why?', 'how?'), rewrite it to include the topic being discussed. "
+                "3. KEEP IT NATURAL: Do not make it sound robotic. Just make it clear. "
+                "4. IF CLEAR: If the input is ALREADY standalone and clear (e.g. 'Hello', 'Who are you?'), return it AS IS. "
+                "Output ONLY the rewritten string."
             )
-            
-            # User Constraint: "不要弄得和专业用途一样" -> Keep it natural.
-            # 实际上 prompt 只要不要求 "formal" 即可。
             
             resp = await client.chat.completions.create(
                 model=summary_model,
                 messages=[
                     {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": f"Context:\n{context_block}\n\nUser Input: {query_text}"}
+                    {"role": "user", "content": f"Conversation Context:\n{context_block}\n\nUser Input to Rewrite:\n{query_text}"}
                 ],
-                max_tokens=100,
+                max_tokens=150,
                 temperature=0.3
             )
             
