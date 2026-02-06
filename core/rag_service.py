@@ -779,11 +779,18 @@ class RagService:
 
     async def clear_chat_vectors(self, chat_id: int):
         """
-        清除指定会话的所有向量数据 (物理删除)
+        清除指定会话的所有向量数据和RAG状态 (物理删除)
         用于 /reset 或 Rebuild Index
         """
         async for session in get_db_session():
             try:
+                # 1. Clear rag_status (The Knowledge Base)
+                await session.execute(
+                    text("DELETE FROM rag_status WHERE chat_id = :chat_id"),
+                    {"chat_id": chat_id}
+                )
+
+                # 2. Clear history_vec (The Vector Index)
                 # 通过子查询删除 history_vec 中对应的 rowid
                 # 假设 history_vec 是虚拟表或普通表，rowid 对应 history.id
                 await session.execute(
@@ -801,26 +808,27 @@ class RagService:
                 if chat_id in self._sync_cooldowns:
                     del self._sync_cooldowns[chat_id]
                     
-                logger.info(f"RAG: Cleared all vectors for chat {chat_id}")
+                logger.info(f"RAG: Cleared all vectors & status for chat {chat_id}")
             except Exception as e:
                 logger.error(f"RAG Clear failed for chat {chat_id}: {e}")
 
     async def clear_all_vectors(self):
         """
-        [Danger] 清除整个数据库的所有向量索引
-        用于切换 Embedding 模型时的全局重建
+        清除所有会话的向量数据 (全局重置)
         """
         async for session in get_db_session():
             try:
+                # 1. Clear rag_status
+                await session.execute(text("DELETE FROM rag_status"))
+
+                # 2. Clear history_vec
                 await session.execute(text("DELETE FROM history_vec"))
+                
                 await session.commit()
-                
-                # 清除所有冷却
                 self._sync_cooldowns.clear()
-                
-                logger.warning("RAG: GLOBALLY CLEARED all vector indices!")
+                logger.info("RAG: Global Index Cleared.")
             except Exception as e:
-                logger.error(f"RAG Global Clear failed: {e}")
+                logger.error(f"Global RAG Clear failed: {e}")
 
     async def rebuild_index(self, chat_id: int = None):
         """

@@ -414,4 +414,45 @@ async def push_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ 检查循环执行完毕。请观察群组消息。")
     except Exception as e:
         logger.error(f"Push Now Failed: {e}")
+    except Exception as e:
+        logger.error(f"Push Now Failed: {e}")
         await update.message.reply_text(f"❌ 执行出错: {e}")
+
+async def rebuild_rag_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /rebuild_rag 指令：清除当前会话的 RAG 索引并触发重新生成 (保留历史记录)
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    if not is_admin(user.id): return
+    if chat.type == constants.ChatType.PRIVATE:
+        await update.message.reply_text("⚠️ 请在群组中使用。")
+        return
+
+    from core.chat_engine import CHAT_LOCKS
+    from core.rag_service import rag_service
+    
+    msg = await update.message.reply_text("⏳ 正在清除 RAG 索引...")
+    
+    try:
+        async with CHAT_LOCKS[chat.id]:
+            await rag_service.clear_chat_vectors(chat.id)
+            
+        # 触发一次后台同步 (Optional, or just wait for scheduled)
+        # 既然是手动指令，最好立即给点反馈，但在后台运行
+        asyncio.create_task(rag_service.run_background_sync())
+        
+        await context.bot.edit_message_text(
+            chat_id=chat.id,
+            message_id=msg.message_id,
+            text="✅ <b>索引已清除 & 重建任务已排队</b>\n\n后台正在重新扫描并降噪历史消息。请过几分钟使用 /stats 查看进度。",
+            parse_mode='HTML'
+        )
+    except Exception as e:
+        logger.error(f"Rebuild RAG failed: {e}")
+        await context.bot.edit_message_text(
+            chat_id=chat.id,
+            message_id=msg.message_id,
+            text=f"❌ 重建失败: {e}"
+        )
