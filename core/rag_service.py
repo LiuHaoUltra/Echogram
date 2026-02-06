@@ -210,18 +210,27 @@ class RagService:
                 try:
                     import core.bot as bot_module
                     if bot_module.bot:
+                        # 构建完整预览 (Max 3500 chars)
+                        full_preview = ""
+                        for idx, item in enumerate(items_to_embed):
+                            # 每个条目只取前 100 字符预览，避免过长
+                            snippet = item.split('\n')[0][:50] + "..." if len(item) > 100 else item
+                            full_preview += f"[{idx+1}] {html.escape(snippet)}\n"
+                        
+                        if len(full_preview) > 3500:
+                            full_preview = full_preview[:3500] + "\n... (Truncated)"
+
                         debug_msg = (
                             f"🔮 <b>RAG Sync: Interaction Mode</b>\n"
                             f"Chat: <code>{chat_id}</code> | Count: <code>{len(items_to_embed)}</code>\n"
-                            f"<pre>{html.escape(items_to_embed[0][:200])}...</pre>"
+                            f"<pre>{full_preview}</pre>"
                         )
-                        # 仅发送第一条作为示例，避免刷屏
-                        if len(items_to_embed) > 0:
-                            await bot_module.bot.send_message(
-                                chat_id=settings.ADMIN_USER_ID,
-                                text=debug_msg,
-                                parse_mode='HTML'
-                            )
+                        
+                        await bot_module.bot.send_message(
+                            chat_id=settings.ADMIN_USER_ID,
+                            text=debug_msg,
+                            parse_mode='HTML'
+                        )
                 except: pass
 
                 # 6. 写入向量表
