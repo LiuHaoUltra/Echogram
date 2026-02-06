@@ -230,9 +230,9 @@ class RagService:
         # 这里先只扫描最近活跃的 Top 20 Chat
         async for session in get_db_session():
             try:
-                # Find chats with recent activity
+                # Find chats with recent activity (Exclude Private Chats: chat_id < 0)
                 recent_chats_res = await session.execute(
-                    text("SELECT DISTINCT chat_id FROM history ORDER BY id DESC LIMIT 20")
+                    text("SELECT DISTINCT chat_id FROM history WHERE chat_id < 0 ORDER BY id DESC LIMIT 20")
                 )
                 chat_ids = [r.chat_id for r in recent_chats_res.fetchall()]
                 
