@@ -277,7 +277,7 @@ class RagService:
                   AND s.msg_id IS NULL
                   AND h.content NOT LIKE '[%: Processing...]'
                 ORDER BY h.id ASC
-                LIMIT 10
+                LIMIT 50
             """)
             
             cand_res = await session.execute(stmt_candidates, {"cid": chat_id, "barrier": active_window_start_id})
