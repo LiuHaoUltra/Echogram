@@ -334,7 +334,7 @@ class RagService:
 
         try:
             configs = await config_service.get_all_settings()
-            summary_model = configs.get("summary_model")
+            summary_model = configs.get("summary_model_name")
             
             # 如果没配摘要模型，则降级使用主模型；如果主模型也没配，则跳过
             if not summary_model:
@@ -388,13 +388,15 @@ class RagService:
                             rewrite_msg = (
                                 f"🔄 <b>RAG Query Rewritten</b>\n"
                                 f"From: <code>{html.escape(query_text)}</code>\n"
-                                f"To: <code>{html.escape(rewritten)}</code>"
+                                f"To: <code>{html.escape(new_query)}</code>"
                             )
                             await bot_module.bot.send_message(settings.ADMIN_USER_ID, rewrite_msg, parse_mode='HTML')
                     except Exception as notify_e:
                         logger.error(f"Failed to send rewrite debug: {notify_e}")
+                else:
+                    logger.info(f"RAG Rewriter: No change ('{new_query}').")
                 
-                return rewritten
+                return new_query
             
         except Exception as e:
             logger.warning(f"Query Rewrite failed: {e}")
