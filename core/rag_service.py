@@ -728,11 +728,14 @@ class RagService:
                 # 必须同时满足: 在 vec 表中 AND 不是 Zero Vector
                 # String comparison of JSON floating point is fragile.
                 # Use LIKE to exclude vectors starting with series of zeros.
+                # Use multiple patterns to catch specific JSON formats (space/no-space/int)
                 stmt_indexed = text("""
                     SELECT COUNT(*) FROM history_vec v
                     JOIN history h ON v.rowid = h.id
                     WHERE h.chat_id = :chat_id
-                      AND v.embedding NOT LIKE '[0.0, 0.0, 0.0,%'
+                      AND v.embedding NOT LIKE '[0.0, 0.0, 0.0, 0.0, 0.0%'
+                      AND v.embedding NOT LIKE '[0.0,0.0,0.0,0.0,0.0%'
+                      AND v.embedding NOT LIKE '[0, 0, 0, 0, 0%'
                 """)
                 
                 # Execute
