@@ -9,6 +9,7 @@ from config.settings import settings
 from config.database import get_db_session
 from core.config_service import config_service
 from models.history import History
+from models.rag_status import RagStatus
 from utils.logger import logger
 import html
 
@@ -109,6 +110,66 @@ class RagService:
             logger.error(f"Embedding API failed: {e}")
             raise
 
+    async def _check_and_migrate_status(self, session, chat_id: int):
+        """
+        [One-off Migration] 迁移旧的状态追踪方式 (Zero Vectors) 到新表 (rag_status)
+        """
+        try:
+            # Check if already migrated (any record exists)
+            count_res = await session.execute(
+                text("SELECT 1 FROM rag_status WHERE chat_id=:cid LIMIT 1"), 
+                {"cid": chat_id}
+            )
+            if count_res.scalar():
+                return 
+
+            # Check if legacy data exists
+            legacy_count = await session.execute(
+                text("SELECT COUNT(*) FROM history_vec v JOIN history h ON v.rowid=h.id WHERE h.chat_id=:cid"), 
+                {"cid": chat_id}
+            )
+            if legacy_count.scalar() == 0:
+                return
+
+            logger.warning(f"RAG: Migrating chat {chat_id} to 'rag_status' table...")
+
+            # 1. Identify Tails (Zero Vectors) -> Insert 'TAIL'
+            # Use shotgun strategy to catch any zero vector format
+            await session.execute(text("""
+                INSERT INTO rag_status (msg_id, chat_id, status)
+                SELECT v.rowid, :cid, 'TAIL'
+                FROM history_vec v
+                JOIN history h ON v.rowid = h.id
+                WHERE h.chat_id = :cid
+                  AND (v.embedding LIKE '[0.0, 0.0%' OR v.embedding LIKE '[0.0,0.0%' OR v.embedding LIKE '[0, 0%')
+            """), {"cid": chat_id})
+
+            # 2. Identify Heads (Real Vectors) -> Insert 'HEAD'
+            # Any vector in DB that is NOT in rag_status yet must be a Head
+            await session.execute(text("""
+                INSERT INTO rag_status (msg_id, chat_id, status)
+                SELECT v.rowid, :cid, 'HEAD'
+                FROM history_vec v
+                JOIN history h ON v.rowid = h.id
+                WHERE h.chat_id = :cid
+                  AND v.rowid NOT IN (SELECT msg_id FROM rag_status WHERE chat_id=:cid)
+            """), {"cid": chat_id})
+
+            # 3. Clean up Tails from history_vec (Free up space/indices)
+            await session.execute(text("""
+                DELETE FROM history_vec
+                WHERE rowid IN (
+                    SELECT msg_id FROM rag_status WHERE chat_id=:cid AND status='TAIL'
+                )
+            """), {"cid": chat_id})
+
+            await session.commit()
+            logger.info(f"RAG: Migration completed for chat {chat_id}")
+
+        except Exception as e:
+            logger.error(f"RAG Migration failed: {e}")
+            # Do not re-raise, allow sync to proceed (fallback)
+
     async def sync_historic_embeddings(self, chat_id: int):
         """
         懒惰全量同步 (Lazy Full-Sync) - Interaction-Centric Mode
@@ -130,14 +191,19 @@ class RagService:
 
         async for session in get_db_session():
             try:
+            try:
+                # 0. Migration Check (Sync-time migration)
+                await self._check_and_migrate_status(session, chat_id)
+
                 # 2. 找出所有未嵌入的 AI 消息 (Anchors)
+                # 使用 rag_status 判断是否已处理
                 stmt = text("""
                     SELECT h.id, h.role, h.content 
                     FROM history h
-                    LEFT JOIN history_vec v ON h.id = v.rowid
+                    LEFT JOIN rag_status s ON h.id = s.msg_id
                     WHERE h.chat_id = :chat_id 
                       AND h.role = 'assistant'
-                      AND v.rowid IS NULL
+                      AND s.msg_id IS NULL
                       AND h.content IS NOT NULL
                       AND h.content != ''
                       AND h.content NOT LIKE '[%: Processing...]'
@@ -290,18 +356,27 @@ class RagService:
                 except: pass
 
                 # 6. Write to DB
-                # Prepare Zero Vector
-                zero_vec = [0.0] * 1536 
+                # PENDING -> Head (Vector + Status)
+                # ZERO -> Tail (Status Only)
                 
                 for i, (mid, status) in enumerate(db_write_ops):
                     final_vec = None
+                    rag_status_val = "TAIL"
+                    
                     if status == "PENDING":
                         # Find mapped vector
                         if i in real_vectors_map:
                             final_vec = real_vectors_map[i]
-                    elif status == "ZERO":
-                        final_vec = zero_vec
+                            rag_status_val = "HEAD"
+                    
+                    # 1. Update Status Table (Always)
+                    # Note: Using INSERT OR IGNORE just in case concurrency
+                    await session.execute(
+                        text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, :status)"),
+                        {"id": mid, "cid": chat_id, "status": rag_status_val}
+                    )
                         
+                    # 2. Insert Vector (Only if Head/Real)
                     if final_vec:
                         await session.execute(
                             text("INSERT INTO history_vec(rowid, embedding) VALUES (:id, :embedding)"),
@@ -725,17 +800,11 @@ class RagService:
                 """)
                 
                 # Indexed Heads (分子)
-                # 必须同时满足: 在 vec 表中 AND 不是 Zero Vector
-                # String comparison of JSON floating point is fragile.
-                # Use LIKE to exclude vectors starting with series of zeros.
-                # Use multiple patterns to catch specific JSON formats (space/no-space/int)
+                # 使用 rag_status 表统计 (Status='HEAD')
+                # 这代表真正产生向量并已被索引的消息
                 stmt_indexed = text("""
-                    SELECT COUNT(*) FROM history_vec v
-                    JOIN history h ON v.rowid = h.id
-                    WHERE h.chat_id = :chat_id
-                      AND v.embedding NOT LIKE '[0.0, 0.0, 0.0, 0.0, 0.0%'
-                      AND v.embedding NOT LIKE '[0.0,0.0,0.0,0.0,0.0%'
-                      AND v.embedding NOT LIKE '[0, 0, 0, 0, 0%'
+                    SELECT COUNT(*) FROM rag_status
+                    WHERE chat_id = :chat_id AND status = 'HEAD'
                 """)
                 
                 # Execute
