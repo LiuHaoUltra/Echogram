@@ -691,25 +691,47 @@ class RagService:
         """
         async for session in get_db_session():
             try:
-                # 统计：符合索引条件的非空消息总数 vs 已索引数量
-                # 排除系统占位符
-                stmt = text("""
-                    SELECT 
-                        COUNT(h.id) as total,
-                        COUNT(v.rowid) as indexed
-                    FROM history h
-                    LEFT JOIN history_vec v ON h.id = v.rowid
-                    WHERE h.chat_id = :chat_id
+                # 统计：
+                # 1. Total Eligible Heads: 仅统计 "Head" (前一条不是 AI 的 AI 消息)
+                # 2. Indexed Heads: 仅统计非 Zero Vector 的索引
+                
+                # 构造 Zero Vector JSON 字符串用于排除
+                zero_vec_json = json.dumps([0.0] * 1536)
+                
+                # SQLite 复杂统计 (Count Heads)
+                # 使用嵌套查询判断 "Is Head"
+                # (h.role='assistant' AND (prev.role IS NULL OR prev.role != 'assistant'))
+                
+                # Total Heads (分母)
+                stmt_total = text("""
+                    SELECT COUNT(*) FROM history h
+                    WHERE h.chat_id = :chat_id 
                       AND h.role = 'assistant'
                       AND h.content IS NOT NULL
                       AND h.content != ''
                       AND h.content NOT LIKE '[%: Processing...]'
+                      AND (
+                          SELECT role FROM history prev 
+                          WHERE prev.chat_id = :chat_id AND prev.id < h.id 
+                          ORDER BY prev.id DESC LIMIT 1
+                      ) IS NOT 'assistant'
                 """)
                 
-                result = await session.execute(stmt, {"chat_id": chat_id})
-                row = result.fetchone()
-                total = row.total if row else 0
-                indexed = row.indexed if row else 0
+                # Indexed Heads (分子)
+                # 必须同时满足: 在 vec 表中 AND 不是 Zero Vector
+                stmt_indexed = text("""
+                    SELECT COUNT(*) FROM history_vec v
+                    JOIN history h ON v.rowid = h.id
+                    WHERE h.chat_id = :chat_id
+                      AND v.embedding != :zero_vec
+                """)
+                
+                # Execute
+                res_total = await session.execute(stmt_total, {"chat_id": chat_id})
+                total = res_total.scalar() or 0
+                
+                res_indexed = await session.execute(stmt_indexed, {"chat_id": chat_id, "zero_vec": zero_vec_json})
+                indexed = res_indexed.scalar() or 0
                 
                 # 检查冷却状态
                 cooldown_left = 0
