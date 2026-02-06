@@ -251,39 +251,18 @@ class RagService:
             configs = await config_service.get_all_settings()
             max_tokens = int(configs.get("history_tokens", 4000)) # Default 4k
             
-            # 获取倒序消息来计算 Token 累加
-            stmt_all = text("SELECT id, role, content, message_type FROM history WHERE chat_id=:cid ORDER BY id DESC LIMIT 200")
-            res_all = await session.execute(stmt_all, {"cid": chat_id})
-            recent_msgs = res_all.fetchall()
-            
-            if not recent_msgs: 
-                return
+        # Reuse the EXACT same logic as /stats to determine the "Active Window" boundary
+        # This prevents any discrepancy between what User sees and what RAG sees.
+        stats = await history_service.get_session_stats(chat_id, max_tokens)
+        active_window_start_id = stats["win_start_id"]
+        
+        logger.info(f"RAG ETL: Chat {chat_id} | BarrierID (from HistoryService): {active_window_start_id}")
+        
+        if active_window_start_id == 0:
+             return
 
-            active_window_start_id = 0
-            curr_tokens = 0
-            
-            # 从新到旧累加 Token
-            for msg in recent_msgs:
-                # 使用标准 Token 计算 (Unified with SummaryService)
-                # 确保 active_window 的计算标准与 Stats/Summary 完全一致
-                t_count = history_service.count_tokens(msg.content or "")
-                curr_tokens += t_count
-                if curr_tokens >= max_tokens:
-                    active_window_start_id = msg.id
-                    break
-            
-            logger.info(f"RAG ETL Debug: Chat {chat_id} | Msgs: {len(recent_msgs)} | Tokens: {curr_tokens}/{max_tokens} | BarrierID: {active_window_start_id}")
 
-            # 如果没填满窗口，那所有消息都在 T1，不处理
-            if active_window_start_id == 0 and len(recent_msgs) < 200:
-                 # History fits in window
-                 if curr_tokens < max_tokens:
-                     return
 
-            if active_window_start_id == 0:
-                # 200条还不够填满？那边界就是第200条
-                active_window_start_id = recent_msgs[-1].id
-                logger.info(f"RAG ETL Debug: Window full (200 limit reached). Force Barrier: {active_window_start_id}")
 
             # 2. 扫描 T2 区 (ID < active_window_start_id) 中的未处理项
             # 条件: 是 Assistant 消息 (Turn End), 且 rag_status 为空
@@ -854,31 +833,23 @@ class RagService:
         """
         async for session in get_db_session():
             try:
-                # 1. 计算 Context Barrier (Unified with SummaryService)
+                # 1. 计算 Context Barrier (Call HistoryService directly)
                 from core.history_service import history_service
                 
                 configs = await config_service.get_all_settings()
                 max_tokens = int(configs.get("history_tokens", 4000))
 
-                # Scan recent messages to find barrier
-                stmt_recent = text("SELECT id, content FROM history WHERE chat_id=:cid ORDER BY id DESC LIMIT 500")
-                recent_msgs = (await session.execute(stmt_recent, {"cid": chat_id})).fetchall()
-
-                curr_tokens = 0
-                barrier_id = 0
+                # Reuse exact logic
+                stats = await history_service.get_session_stats(chat_id, max_tokens)
+                barrier_id = stats["win_start_id"]
+                
+                # Simple count for active window
+                stmt_active_count = text("SELECT COUNT(*) FROM history WHERE chat_id=:cid AND id >= :barrier")
                 active_count = 0
+                if barrier_id > 0:
+                    active_count = (await session.execute(stmt_active_count, {"cid": chat_id, "barrier": barrier_id})).scalar() or 0
 
-                for msg in recent_msgs:
-                    t_count = history_service.count_tokens(msg.content or "")
-                    curr_tokens += t_count
-                    if curr_tokens >= max_tokens:
-                        barrier_id = msg.id
-                        break
-                    active_count += 1
 
-                if barrier_id == 0 and recent_msgs:
-                    # History shorter than window
-                    barrier_id = 0 # All active
 
                 # 2. Count Indexed (HEAD)
                 stmt_indexed = text("SELECT COUNT(*) FROM rag_status WHERE chat_id = :cid AND status = 'HEAD'")
