@@ -365,7 +365,7 @@ class RagService:
         if chk.scalar():
             # Mark curent anchor as SKIPPED just in case
              if anchor_id != real_head_id:
-                 await session.execute(text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, 'SKIPPED')"), 
+                 await session.execute(text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status, processed_at) VALUES (:id, :cid, 'SKIPPED', CURRENT_TIMESTAMP)"), 
                                        {"id": anchor_id, "cid": chat_id})
                  await session.commit()
              return
@@ -411,8 +411,8 @@ class RagService:
         # Head
         await session.execute(
             text("""
-                INSERT OR REPLACE INTO rag_status (msg_id, chat_id, status, denoised_content) 
-                VALUES (:id, :cid, 'HEAD', :content)
+                INSERT OR REPLACE INTO rag_status (msg_id, chat_id, status, denoised_content, processed_at) 
+                VALUES (:id, :cid, 'HEAD', :content, CURRENT_TIMESTAMP)
             """), 
             {"id": real_head_id, "cid": chat_id, "content": denoised_text}
         )
@@ -426,14 +426,14 @@ class RagService:
         for aid in ai_ids:
             if aid != real_head_id:
                 await session.execute(
-                    text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, 'TAIL')"),
+                    text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status, processed_at) VALUES (:id, :cid, 'TAIL', CURRENT_TIMESTAMP)"),
                     {"id": aid, "cid": chat_id}
                 )
                 
         # Users (Linked parts)
         for uid in user_ids:
             await session.execute(
-                text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status) VALUES (:id, :cid, 'TAIL')"),
+                text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status, processed_at) VALUES (:id, :cid, 'TAIL', CURRENT_TIMESTAMP)"),
                 {"id": uid, "cid": chat_id}
             )
 
