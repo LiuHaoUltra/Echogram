@@ -272,16 +272,18 @@ class RagService:
                     active_window_start_id = msg.id
                     break
             
+            logger.info(f"RAG ETL Debug: Chat {chat_id} | Msgs: {len(recent_msgs)} | Tokens: {curr_tokens}/{max_tokens} | BarrierID: {active_window_start_id}")
+
             # 如果没填满窗口，那所有消息都在 T1，不处理
             if active_window_start_id == 0 and len(recent_msgs) < 200:
-                # 只有当消息很少时才可能发生。如果消息很多但 active_window_start_id 还是 0 (意味着 200条都没填满?)
-                # 这种情况下，取最老的一条作为边界，或者暂不处理
-                if curr_tokens < max_tokens:
-                    return
+                 # History fits in window
+                 if curr_tokens < max_tokens:
+                     return
 
             if active_window_start_id == 0:
                 # 200条还不够填满？那边界就是第200条
                 active_window_start_id = recent_msgs[-1].id
+                logger.info(f"RAG ETL Debug: Window full (200 limit reached). Force Barrier: {active_window_start_id}")
 
             # 2. 扫描 T2 区 (ID < active_window_start_id) 中的未处理项
             # 条件: 是 Assistant 消息 (Turn End), 且 rag_status 为空
