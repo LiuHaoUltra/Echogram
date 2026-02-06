@@ -324,8 +324,12 @@ class RagService:
         使用摘要模型快速重写查询，消除指代不明 (Resolution of Coreference)。
         只在 query 较短或包含代词时触发 (由调用方控制，或在此处简单判断)。
         """
+        # [DEBUG] Log entry
+        logger.info(f"RAG Rewriter: Input='{query_text}' (Len: {len(query_text)})")
+
         # 简单启发式过滤：如果很长，可能不需要重写 (省钱)
         if len(query_text) > 40:
+            logger.info("RAG Rewriter: Skipped (Length > 40)")
             return query_text
 
         try:
@@ -337,7 +341,10 @@ class RagService:
                 summary_model = configs.get("model_name")
             
             if not summary_model:
+                logger.warning("RAG Rewriter: Skipped (No Model Configured)")
                 return query_text
+
+            logger.info(f"RAG Rewriter: Using model '{summary_model}'")
 
             client = await self._get_client()
             
@@ -361,24 +368,20 @@ class RagService:
                 model=summary_model,
                 messages=[
                     {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": f"Context:\n{context_block}\n\nLatest Input: {query_text}"}
+                    {"role": "user", "content": f"Context:\n{context_block}\n\nUser Input: {query_text}"}
                 ],
-                temperature=0.3, # 偏确定性
-                max_tokens=60
+                max_tokens=100,
+                temperature=0.3
             )
             
             if resp.choices and resp.choices[0].message.content:
-                rewritten = resp.choices[0].message.content.strip()
-                # 简单清洗：去掉引号
-                if rewritten.startswith('"') and rewritten.endswith('"'):
-                    rewritten = rewritten[1:-1]
+                new_query = resp.choices[0].message.content.strip()
+                # 移除可能误带的引号
+                if new_query.startswith('"') and new_query.endswith('"'):
+                    new_query = new_query[1:-1]
                 
-                if "cannot" in rewritten or "sorry" in rewritten.lower():
-                    return query_text
-                    
-                # [DEBUG] 只有当发生实质变化时才打 Log & 通知
-                if rewritten.lower() != query_text.lower():
-                    logger.info(f"RAG Rewrite: '{query_text}' -> '{rewritten}'")
+                if new_query != query_text:
+                    logger.info(f"RAG Rewriter: '{query_text}' -> '{new_query}'")
                     try:
                         import core.bot as bot_module
                         if bot_module.bot:
