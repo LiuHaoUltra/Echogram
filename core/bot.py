@@ -63,6 +63,26 @@ async def post_init(application: Application):
             break # 用完即弃
     except Exception as e:
         logger.error(f"Schema check (file_id) failed: {e}")
+
+    # --- Schema Patch (Fix for denoised_content missing in RAG v2) ---
+    try:
+        from config.database import get_db_session
+        from sqlalchemy import text
+        async for session in get_db_session():
+            try:
+                # Check if column exists
+                await session.execute(text("SELECT denoised_content FROM rag_status LIMIT 1"))
+            except Exception:
+                logger.warning("Column 'denoised_content' missing in 'rag_status'. Applying patch...")
+                try:
+                    await session.execute(text("ALTER TABLE rag_status ADD COLUMN denoised_content TEXT"))
+                    await session.commit()
+                    logger.info("Schema patch applied: 'denoised_content' column added.")
+                except Exception as e:
+                    logger.error(f"Failed to apply schema patch (denoised_content): {e}")
+            break
+    except Exception as e:
+        logger.error(f"Schema check (denoised_content) failed: {e}")
     # ---------------------------------------------------
     # ---------------------------------------------------
     
