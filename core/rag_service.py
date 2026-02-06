@@ -863,7 +863,6 @@ class RagService:
                         LEFT JOIN rag_status s ON h.id = s.msg_id
                         WHERE h.chat_id = :cid
                           AND h.id < :barrier
-                          AND h.role = 'assistant'
                           AND s.msg_id IS NULL
                           AND h.content NOT LIKE '[%: Processing...]'
                     """)
