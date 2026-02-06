@@ -251,15 +251,15 @@ class RagService:
             configs = await config_service.get_all_settings()
             max_tokens = int(configs.get("history_tokens", 4000)) # Default 4k
             
-        # Reuse the EXACT same logic as /stats to determine the "Active Window" boundary
-        # This prevents any discrepancy between what User sees and what RAG sees.
-        stats = await history_service.get_session_stats(chat_id, max_tokens)
-        active_window_start_id = stats["win_start_id"]
-        
-        logger.info(f"RAG ETL: Chat {chat_id} | BarrierID (from HistoryService): {active_window_start_id}")
-        
-        if active_window_start_id == 0:
-             return
+            # Reuse the EXACT same logic as /stats to determine the "Active Window" boundary
+            # This prevents any discrepancy between what User sees and what RAG sees.
+            stats = await history_service.get_session_stats(chat_id, max_tokens)
+            active_window_start_id = stats["win_start_id"]
+            
+            logger.info(f"RAG ETL: Chat {chat_id} | BarrierID (from HistoryService): {active_window_start_id}")
+            
+            if active_window_start_id == 0:
+                 return
 
 
 
