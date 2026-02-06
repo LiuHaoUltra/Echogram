@@ -159,7 +159,6 @@ def run_bot():
     application.add_handler(CommandHandler("sub", sub_command))
     application.add_handler(CommandHandler("sub", sub_command))
     application.add_handler(CommandHandler("push_now", push_now_command))
-    application.add_handler(CommandHandler("rebuild_rag", rebuild_rag_command))
     
     # 聊天引擎处理器 (低优先级)
     from telegram.ext import MessageHandler, filters
