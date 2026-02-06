@@ -80,7 +80,8 @@ async def process_message_entry(update: Update, context: ContextTypes.DEFAULT_TY
         reply_to_content=reply_to_content
     )
     
-    await lazy_sender.on_message(chat.id, context)
+    # 触发聚合 (传递 dedup_id 以支持 Edits 并防重复)
+    await lazy_sender.on_message(chat.id, context, dedup_id=update.update_id)
 
     try:
         asyncio.create_task(summary_service.check_and_summarize(chat.id))
@@ -133,8 +134,8 @@ async def process_photo_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         message_type="image", file_id=file_id
     )
     
-    # 触发聚合
-    await lazy_sender.on_message(chat.id, context)
+    # 触发聚合 (传递 dedup_id 以支持 Edits 并防重复)
+    await lazy_sender.on_message(chat.id, context, dedup_id=update.update_id)
     try:
         asyncio.create_task(summary_service.check_and_summarize(chat.id))
     except:
@@ -181,8 +182,8 @@ async def process_voice_message_entry(update: Update, context: ContextTypes.DEFA
         message_type="voice", file_id=file_id
     )
     
-    # 触发聚合
-    await lazy_sender.on_message(chat.id, context)
+    # 触发聚合 (传递 dedup_id 以支持 Edits 并防重复)
+    await lazy_sender.on_message(chat.id, context, dedup_id=update.update_id)
     try:
         asyncio.create_task(summary_service.check_and_summarize(chat.id))
     except:

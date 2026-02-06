@@ -11,6 +11,10 @@ class LazySender:
         """
         # Buffer 结构: {chat_id: {'task': Task, 'start_time': float, 'context': Context}}
         self.buffers: Dict[int, Dict[str, Any]] = {}
+        
+        # Deduplication Cache: {message_id: timestamp}
+        self._seen_ids: Dict[int, float] = {}
+        
         # Callback 稍后绑定
         self.callback = None
         self._default_max_wait = 60.0
@@ -19,11 +23,33 @@ class LazySender:
         """设置刷新时的回调函数"""
         self.callback = callback
 
-    async def on_message(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+    def _cleanup_cache(self, current_time: float, ttl: float = 300.0):
+        """清理过期的 Update ID (防止内存泄漏)"""
+        expired = [mid for mid, ts in self._seen_ids.items() if current_time - ts > ttl]
+        for mid in expired:
+            del self._seen_ids[mid]
+
+    async def on_message(self, chat_id: int, context: ContextTypes.DEFAULT_TYPE, dedup_id: int = None):
         """
-        接收新消息信号
+        接收新消息信号 (带去重)
+        :param dedup_id: Telegram Update ID (用于防重复处理，支持 Edits)
         """
         current_time = time.time()
+        
+        # 1. 入口去重 (Ingress Deduplication)
+        if dedup_id:
+            # 懒清理 (Lazy Cleanup): 每次有新消息时顺便清理一下过期的
+            if len(self._seen_ids) > 1000: # 只有积压多了才清理，避免频繁遍历
+                self._cleanup_cache(current_time)
+            
+            if dedup_id in self._seen_ids:
+                # Double Check TTL (Keys might persist strictly)
+                if current_time - self._seen_ids[dedup_id] < 300.0:
+                    logger.warning(f"LazySender: Duplicate Update ID {dedup_id} ignored.")
+                    return
+            
+            # 记录新 ID
+            self._seen_ids[dedup_id] = current_time
         
         # 读取防抖配置，范围 0.5-300 秒
         idle_wait_str = await config_service.get_value("aggregation_latency", "10")
