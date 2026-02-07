@@ -113,23 +113,37 @@ class PromptBuilder:
         # 5. Constraints
         constraints = cls.CONSTRAINTS_TEMPLATE
         
-        # 6. Mode Indicator (尾部注入，利用 Recency Bias 压制历史偏置)
+
+        # 6. Anti-Hallucination (Final logic guard)
+        # 强制防止模型伪造消息头，放在最末尾以利用 Recency Bias
+        anti_hallucination = (
+            "\n\n# 最终对齐 (Final Alignment)\n"
+            "> [CRITICAL] 严禁伪造 `[MSG ...]` 或 `[User]` 等消息头。你的回复必须直接以 `<chat>` 开头。\n"
+            "\n"
+            "## ✅ 正确示例:\n"
+            "<chat>普通回复内容</chat>\n"
+            '<chat react="🥵">如果你需要使用表情回应，请这样写</chat>\n'
+            '<chat react="🥵":114514>如果你需要使用表情回应指定消息，请这样写</chat>\n'
+            '<chat reply="123456">如果你需要回复某条消息，请这样写</chat>\n'
+            '<chat reply="123456" react="🥵":114514>如果你需要同时回复某条消息并使用表情回应，请这样写</chat>\n'
+            "\n"
+            "## ❌ 错误示例:\n"
+            "Assistant: [MSG 124] [Timestamp] <chat>...</chat>\n"
+        )
+
+        # 7. Mode Indicator (尾部注入，利用 Recency Bias 压制历史偏置)
         if has_voice:
             mode_indicator = "\n\n# 当前任务模式：语音回复 (Voice Response)\n> [IMPORTANT] 模式要求：推荐 1 个气泡，上限 3 个。保持语音连贯性。"
         else:
             mode_indicator = "\n\n# 当前任务模式：文字聊天 (Text Chat)\n> [IMPORTANT] 模式要求：推荐 1-5 个短语气泡。简单回复必须只用 1-2 个。模仿 IM 自然节奏。"
 
-        # 7. 违规警告 (针对上一轮的错误行为进行即时反馈)
+        # 8. 违规警告 (针对上一轮的错误行为进行即时反馈)
         warning_block = ""
         if reaction_violation:
             warning_block = "\n\n# ⚠️ 行为纠偏 (Behavioral Correction)\n> [WARNING] 你在上一轮使用了**非白名单**的表情回应。严禁使用除 👍, ❤️, 🔥, 🥰, 🤔, 🤣, 😡, 🫡, 👀, 🌚, 😭, 💩, 🤝 以外的任何回应。请遵守协议，不要滥用 react 属性。"
 
-        # 8. Anti-Hallucination (Final logic guard)
-        # 强制防止模型伪造消息头，放在最末尾以利用 Recency Bias
-        anti_hallucination = "\n\n# 最终对齐 (Final Alignment)\n> [CRITICAL] 严禁伪造 `[MSG ...]` 或 `[User]` 等消息头。你的回复必须直接以 `<chat>` 开头。"
-
-        # 最终组装
-        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{mode_indicator}{warning_block}{anti_hallucination}"
+        # 最终组装 (Anti-Hallucination 位于倒数第三)
+        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{anti_hallucination}{mode_indicator}{warning_block}"
 
 
     @classmethod
