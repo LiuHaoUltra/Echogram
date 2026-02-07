@@ -39,5 +39,5 @@
     # RAG Settings
     WAITING_INPUT_RAG_COOLDOWN,
     WAITING_INPUT_RAG_THRESHOLD
-) = range(28)
+) = range(29)
 
