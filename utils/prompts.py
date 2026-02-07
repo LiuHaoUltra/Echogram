@@ -43,14 +43,9 @@ class PromptBuilder:
 """
 
     # 多模态标签指令 (Backfill 需求)
-    MULTIMODAL_TAGS = """## (2) 多模态标签协议 (Multimodal Tags)
-- **语音转录 (Transcript)**：在 `<chat>` 之前，若收到语音，必须为**每一段**语音生成一个 `<transcript msg_id="ID">` 标签（ID 为语音上方标注的 MSG ID）。
-- **视觉摘要 (Visual Summary)**：在回复末尾，若收到图片，必须为**每一张**图片生成一个 `<img_summary msg_id="ID">` 标签（ID 为图片上方标注的 MSG ID）。
-- **示例 (Pattern)**：
-  <transcript msg_id="201">你好，听得到吗？</transcript>
-  <chat react="😊">听得很清楚！</chat>
-  <img_summary msg_id="101">一只橘猫躺在沙发上。</img_summary>
-"""
+    # 多模态标签指令 (已移除，主模型不再负责生成 Tag)
+    # MULTIMODAL_TAGS = ...
+
 
     # 标签属性
     TAG_ATTRIBUTES = """## (3) 标签属性 (Attributes)
@@ -64,7 +59,7 @@ class PromptBuilder:
     # 通用约束 (Constraints)
     CONSTRAINTS_TEMPLATE = """
 # 强制约束 (Constraints) [最高优先级]
-- **唯一合法容器**：所有内容必须在 `<chat>` (及 `<transcript>`) 内部，外层严禁任何文本。
+- **唯一合法容器**：所有内容必须在 `<chat>` 内部，外层严禁任何文本。
 - **禁止重复 React**：严禁在单次回复的多个气泡中对同一个对象发送不同的 React。
 - **严禁正文指令**：禁止在标签内部使用任何斜杠指令。
 """
@@ -106,9 +101,9 @@ class PromptBuilder:
         else:
             protocol_parts.append(cls.BUBBLE_FRAGMENTED)
             
-        # B. 多模态标签 (如果涉及语音或图片)
-        if has_voice or has_image:
-            protocol_parts.append(cls.MULTIMODAL_TAGS)
+        # B. 多模态标签 (已解耦，主模型无需输出标签)
+        # Shift-Left 已经将内容处理为 [Image Summary: ...] 和 纯文本
+        # 主模型只需像处理普通文本一样对待它们即可
             
         # C. 属性
         protocol_parts.append(cls.TAG_ATTRIBUTES)

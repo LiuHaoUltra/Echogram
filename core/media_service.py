@@ -403,9 +403,12 @@ class MediaService:
 
     async def transcribe_audio(self, file_bytes: bytes) -> str:
         """
-        [Shift-Left] 语音转文字 (使用配置的 media_model, e.g. gemini-2.0-flash)
+        [Shift-Left] 语音转文字 (使用配置的 media_model)
+        Args:
+            file_bytes: 音频数据
         """
         import base64
+        import re
         
         configs = await config_service.get_all_settings()
         api_key = configs.get("api_key")
@@ -420,14 +423,19 @@ class MediaService:
             return "[语音转录失败: 未配置 API Key]"
 
         try:
-            # 转换为 Base64 (Gemini 等模型接收 Inline Data)
-            # 注意: 这里假设模型支持音频 (如 gemini-2.0-flash-exp)
-            # 需要先转码为 wav base64 (复用 process_audio_to_base64)
+            # 转换为 Base64
             base64_audio = await self.process_audio_to_base64(file_bytes)
             if not base64_audio:
                 return "[语音预处理失败]"
 
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+            
+            # 使用 XML 协议约束输出，防止废话
+            prompt = (
+                f"Please transcribe the audio content verbatim.\n"
+                f"Strictly wrap your output in this XML tag: <transcript>YOUR_TEXT_HERE</transcript>\n"
+                f"Do not output any other text."
+            )
             
             response = await client.chat.completions.create(
                 model=model_name,
@@ -435,7 +443,7 @@ class MediaService:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Please transcribe this audio content verbatim. Only output the transcription text."},
+                            {"type": "text", "text": prompt},
                             {
                                 "type": "input_audio",
                                 "input_audio": {
@@ -446,13 +454,21 @@ class MediaService:
                         ]
                     }
                 ],
-                max_tokens=500  # 转录通常不需要太长
+                max_tokens=500
             )
             
             if response.choices and response.choices[0].message.content:
-                transcript = response.choices[0].message.content.strip()
-                logger.info(f"Audio Transcribed ({model_name}): {transcript[:50]}...")
-                return transcript
+                raw_content = response.choices[0].message.content.strip()
+                # 解析 XML 提取纯文本
+                match = re.search(r'<transcript>(.*?)</transcript>', raw_content, re.DOTALL | re.IGNORECASE)
+                if match:
+                    transcript = match.group(1).strip()
+                    logger.info(f"Audio Transcribed ({model_name}): {transcript[:50]}...")
+                    return transcript
+                else:
+                    # Fallback
+                    logger.warning(f"Audio Transcription missing XML tags. Raw: {raw_content[:50]}...")
+                    return raw_content
             
             return "[语音转录无结果]"
             
@@ -463,7 +479,10 @@ class MediaService:
     async def caption_image(self, file_bytes: bytes) -> str:
         """
         [Shift-Left] 图片转文字描述 (利用配置的 media_model)
+        Args:
+            file_bytes: 图片数据
         """
+        import re
         configs = await config_service.get_all_settings()
         api_key = configs.get("api_key")
         base_url = configs.get("api_base_url")
@@ -479,18 +498,25 @@ class MediaService:
             
             client = AsyncOpenAI(api_key=api_key, base_url=base_url)
             
+            # 使用 XML 协议约束输出
+            prompt = (
+                f"描述这张图片的内容。\n"
+                f"Strictly wrap your output in this XML tag: <img_summary>YOUR_DESCRIPTION_HERE</img_summary>\n"
+                f"Do not output anything else."
+            )
+            
             response = await client.chat.completions.create(
                 model=model_name,
                 messages=[
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "请详细描述这张图片的内容，包括主要物体、文字、场景和氛围。直接输出描述，不要加前缀。"},
+                            {"type": "text", "text": prompt},
                             {
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:image/jpeg;base64,{base64_image}",
-                                    "detail": "low" # 平衡成本与速度
+                                    "detail": "low"
                                 }
                             }
                         ]
@@ -500,14 +526,21 @@ class MediaService:
             )
             
             if response.choices and response.choices[0].message.content:
-                caption = response.choices[0].message.content.strip()
-                logger.info(f"Image Captioned ({model_name}): {caption[:50]}...")
-                return caption
+                raw_content = response.choices[0].message.content.strip()
+                # 解析 XML 提取纯文本
+                match = re.search(r'<img_summary>(.*?)</img_summary>', raw_content, re.DOTALL | re.IGNORECASE)
+                if match:
+                    caption = match.group(1).strip()
+                    logger.info(f"Image Captioned ({model_name}): {caption[:50]}...")
+                    return caption
+                else:
+                    logger.warning(f"Image Caption missing XML tags. Raw: {raw_content[:50]}...")
+                    return raw_content
             
             return "[图片分析无结果]"
             
         except Exception as e:
-            logger.error(f"Image captioning failed: {e}")
+            logger.error(f"Caption failed: {e}")
             return f"[图片分析失败: {str(e)[:50]}]"
 
 media_service = MediaService()

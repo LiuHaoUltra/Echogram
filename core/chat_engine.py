@@ -250,62 +250,70 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # --- Shift-Left: Multimodal Pre-processing ---
         # 在 RAG 搜索之前，先处理 Pending 的图片和语音，获取 Caption/Transcript
         # 这样 RAG Rewrite 就能利用这些信息
-        
         # 缓存处理结果，避免后续重复下载
         processed_media_cache = {} # msg_id -> (type, content_text)
         
         pending_images_map = {}
-        pending_voices_map = {}
+        pending_voices_map = {} # Initialize this map as it's used in process_media_item
+        # --- Shift-Left: Multimodal Pre-processing (Parallelized) ---
+        # 并行处理所有待处理的图片和语音，以最大化 TTFT
+        tasks = []
         
-        # 扫描并预处理
-        for msg in tail_msgs:
-            if not msg.message_id: continue
-            
-            # Image Processing
+        async def process_media_item(msg):
+            # 1. Image Processing
             if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in msg.content:
                 try:
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
                     file_bytes = bytes(b)
                     
-                    # 1. Get Caption
+                    # Call Media Model (Captioning)
+                    # Use generic XML Protocol
                     caption = await media_service.caption_image(file_bytes)
-                    processed_media_cache[msg.message_id] = ("image", caption)
                     
-                    # 2. Update Content in Object (Temporary for RAG)
-                    # Legacy Format: [Image Summary: caption]
-                    # This matches rag_service.sanitize_content logic
+                    # Cache & Update Content using Legacy Format
+                    # Format: [Image Summary: caption]
+                    processed_media_cache[msg.message_id] = ("image", caption)
                     msg.content = f"[Image Summary: {caption}]"
                     
-                    # 3. Store for later rendering
+                    # Store for later rendering
                     pending_images_map[msg.message_id] = (msg, file_bytes)
-                    
                 except Exception as e:
                     logger.error(f"Shift-Left Image failed: {e}")
                     msg.content = "[Image Summary: Analyze Failed]"
 
-            # Voice Processing
+            # 2. Voice Processing
             elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in msg.content:
                 try:
                     f = await context.bot.get_file(msg.file_id)
                     b = await f.download_as_bytearray()
                     file_bytes = bytes(b)
                     
-                    # 1. Get Transcript
+                    # Call Media Model (Transcription)
+                    # Use generic XML Protocol
                     transcript = await media_service.transcribe_audio(file_bytes)
-                    processed_media_cache[msg.message_id] = ("voice", transcript)
                     
-                    # 2. Update Content
-                    # Voice requests typically just replace the placeholder with the text
-                    # No [Voice Transcript:] wrapper needed for clean history
+                    # Cache & Update Content using Legacy Format
+                    # Format: Raw Text
+                    processed_media_cache[msg.message_id] = ("voice", transcript)
                     msg.content = transcript
                     
-                    # 3. Store
+                    # Store
                     pending_voices_map[msg.message_id] = (msg, file_bytes)
-                    
                 except Exception as e:
                     logger.error(f"Shift-Left Voice failed: {e}")
                     msg.content = "[Voice Transcript Failed]"
+
+        # Create tasks for all tail messages
+        if tail_msgs:
+            for msg in tail_msgs:
+                if msg.message_type in ('image', 'voice'):
+                    tasks.append(process_media_item(msg))
+            
+            if tasks:
+                logger.info(f"Shift-Left: Processing {len(tasks)} media items in parallel...")
+                await asyncio.gather(*tasks)
+
 
         # --- RAG Search ---
         # 移到锁内执行，确保使用最新的 embeddings
@@ -437,13 +445,13 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             # Image
             if msg.message_id in pending_images_map:
                 msg_obj, file_bytes = pending_images_map[msg.message_id]
-                # 获取之前 Shift-Left 生成的 Caption (存在 msg.content 里了)
-                current_caption = msg.content # e.g. [Image Summary: xxx]
+                # 获取 XML (Shift-Left 已更新 msg.content)
+                # content: <img_summary ...>...</img_summary>
                 
                 try:
                     b64 = await media_service.process_image_to_base64(file_bytes)
                     if b64:
-                        multimodal_content.append({"type": "text", "text": f"{prefix}{current_caption}"})
+                        multimodal_content.append({"type": "text", "text": f"{prefix}{msg.content}"})
                         multimodal_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                 except Exception as e:
                     logger.error(f"Image B64 failed: {e}")
@@ -452,12 +460,12 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             # Voice
             elif msg.message_id in pending_voices_map:
                 msg_obj, file_bytes = pending_voices_map[msg.message_id]
-                current_transcript = msg.content # e.g. 啥玩意儿啊
+                # content: <transcript ...>...</transcript>
                 
                 try:
                     b64 = await media_service.process_audio_to_base64(file_bytes)
                     if b64:
-                        multimodal_content.append({"type": "text", "text": f"{prefix}{current_transcript}"})
+                        multimodal_content.append({"type": "text", "text": f"{prefix}{msg.content}"})
                         multimodal_content.append({"type": "input_audio", "input_audio": {"data": b64, "format": "wav"}})
                 except Exception as e:
                     logger.error(f"Voice B64 failed: {e}")
@@ -520,15 +528,16 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # Let's add DB persistent updates here for processed items
         for mid, (mtype, content) in processed_media_cache.items():
             if mtype == 'image':
-                # content is caption
                  msg_obj, _ = pending_images_map.get(mid, (None,None))
                  if msg_obj:
+                    # Persist Legacy Format: [Image Summary: caption]
                     await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[Image Summary: {content}]")
+                    
             elif mtype == 'voice':
-                # content is transcript
+                 # content is transcript
                  msg_obj, _ = pending_voices_map.get(mid, (None,None))
                  if msg_obj:
-                     # For voice, we usually just store the text
+                     # Persist Legacy Format: Raw Text
                     await history_service.update_message_content_by_file_id(msg_obj.file_id, content)
 
         # 8.2 原有的 XML 回填逻辑 (Optional Compatibility)
