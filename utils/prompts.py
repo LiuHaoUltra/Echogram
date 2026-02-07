@@ -60,7 +60,6 @@ class PromptBuilder:
     CONSTRAINTS_TEMPLATE = """
 # 强制约束 (Constraints) [最高优先级]
 - **唯一合法容器**：所有内容必须在 `<chat>` 内部，外层严禁任何文本。即使只有一句话也必须包裹。
-- **严禁伪造头信息**：严禁输出 `[MSG ID]`, `[Time]`, `[User]`, `[Voice]` 等消息头。
 - **禁止重复 React**：严禁在单次回复的多个气泡中对同一个对象发送不同的 React。
 - **严禁正文指令**：禁止在标签内部使用任何斜杠指令。
 """
@@ -125,8 +124,12 @@ class PromptBuilder:
         if reaction_violation:
             warning_block = "\n\n# ⚠️ 行为纠偏 (Behavioral Correction)\n> [WARNING] 你在上一轮使用了**非白名单**的表情回应。严禁使用除 👍, ❤️, 🔥, 🥰, 🤔, 🤣, 😡, 🫡, 👀, 🌚, 😭, 💩, 🤝 以外的任何回应。请遵守协议，不要滥用 react 属性。"
 
+        # 8. Anti-Hallucination (Final logic guard)
+        # 强制防止模型伪造消息头，放在最末尾以利用 Recency Bias
+        anti_hallucination = "\n\n# 最终对齐 (Final Alignment)\n> [CRITICAL] 严禁伪造 `[MSG ...]` 或 `[User]` 等消息头。你的回复必须直接以 `<chat>` 开头。"
+
         # 最终组装
-        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{mode_indicator}{warning_block}"
+        return f"{kernel}\n{summary_block}\n{soul_block}\n{protocol_block}\n{constraints}{mode_indicator}{warning_block}{anti_hallucination}"
 
 
     @classmethod
