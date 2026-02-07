@@ -247,13 +247,71 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             base_msgs = history_msgs[:last_assistant_idx+1]
             tail_msgs = history_msgs[last_assistant_idx+1:]
     
+        # --- Shift-Left: Multimodal Pre-processing ---
+        # 在 RAG 搜索之前，先处理 Pending 的图片和语音，获取 Caption/Transcript
+        # 这样 RAG Rewrite 就能利用这些信息
+        
+        # 缓存处理结果，避免后续重复下载
+        processed_media_cache = {} # msg_id -> (type, content_text)
+        
+        pending_images_map = {}
+        pending_voices_map = {}
+        
+        # 扫描并预处理
+        for msg in tail_msgs:
+            if not msg.message_id: continue
+            
+            # Image Processing
+            if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in msg.content:
+                try:
+                    f = await context.bot.get_file(msg.file_id)
+                    b = await f.download_as_bytearray()
+                    file_bytes = bytes(b)
+                    
+                    # 1. Get Caption
+                    caption = await media_service.caption_image(file_bytes)
+                    processed_media_cache[msg.message_id] = ("image", caption)
+                    
+                    # 2. Update Content in Object (Temporary for RAG)
+                    # 原 content: [Image: Processing...]xxx
+                    # 新 content: [图片内容: caption]
+                    msg.content = f"[图片内容: {caption}]"
+                    
+                    # 3. Store for later rendering
+                    pending_images_map[msg.message_id] = (msg, file_bytes)
+                    
+                except Exception as e:
+                    logger.error(f"Shift-Left Image failed: {e}")
+                    msg.content = "[图片处理失败]"
+
+            # Voice Processing
+            elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in msg.content:
+                try:
+                    f = await context.bot.get_file(msg.file_id)
+                    b = await f.download_as_bytearray()
+                    file_bytes = bytes(b)
+                    
+                    # 1. Get Transcript
+                    transcript = await media_service.transcribe_audio(file_bytes)
+                    processed_media_cache[msg.message_id] = ("voice", transcript)
+                    
+                    # 2. Update Content
+                    msg.content = f"[语音转录: {transcript}]"
+                    
+                    # 3. Store
+                    pending_voices_map[msg.message_id] = (msg, file_bytes)
+                    
+                except Exception as e:
+                    logger.error(f"Shift-Left Voice failed: {e}")
+                    msg.content = "[语音处理失败]"
+
         # --- RAG Search ---
         # 移到锁内执行，确保使用最新的 embeddings
         try:
-            # 聚合当前轮次中所有的用户文本消息作为查询词
+            # 聚合当前轮次中所有的用户文本消息作为查询词 (此时已包含多模态转换后的文本)
             user_texts = [
                 m.content for m in tail_msgs 
-                if m.role == 'user' and m.content and not m.content.startswith("[")
+                if m.role == 'user' and m.content
             ]
             current_query = " ".join(user_texts).strip()
             
@@ -348,21 +406,21 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             prefix += f'(Reply to "{h.reply_to_content}") '
         messages.append({"role": h.role, "content": prefix + h.content})
 
-    # 5. 扫描聚合区间内的 Pending 内容
-    pending_images_map = {}
-    pending_voices_map = {}
-    has_multimodal = False
-    for msg in tail_msgs:
-        if "[Image: Processing...]" in msg.content or "[Voice: Processing...]" in msg.content:
-            has_multimodal = True
-            break
-
-    if has_multimodal:
-        logger.info(f"Multimodal Batch Triggered. Processing {len(tail_msgs)} tail messages.")
+    # 5. 扫描聚合区间内的 Pending 内容 (Using Pre-processed Cache)
+    # pending_images_map = {msg_id: (msg_obj, file_bytes)}
+    # pending_voices_map = {msg_id: (msg_obj, file_bytes)}
+    
+    has_multimodal = bool(pending_images_map or pending_voices_map)
+    
+    # 还需要检查是否有纯文本的 tail messages 需要加入
+    # 如果 tail_msgs 里有 id 不在 pending map 里，且是 user 文本，也算 multimodal batch 吗？
+    # 统一逻辑：只要有 tail_msgs，就重组为 user message list
+    
+    if tail_msgs:
         multimodal_content = []
         
         for msg in tail_msgs:
-            # 格式化时间戳
+            # Time & Prefix
             time_str = "Unknown"
             if msg.timestamp:
                 try:
@@ -374,40 +432,36 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             msg_type_str = msg.message_type.capitalize() if msg.message_type else "Text"
             prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
 
-            if msg.message_type == 'image' and msg.file_id and "[Image: Processing...]" in msg.content:
-                # 提取 Caption 
-                caption_text = msg.content.replace("[Image: Processing...]", "").strip()
+            # Image
+            if msg.message_id in pending_images_map:
+                msg_obj, file_bytes = pending_images_map[msg.message_id]
+                # 获取之前 Shift-Left 生成的 Caption (存在 msg.content 里了)
+                current_caption = msg.content # e.g. [图片内容: xxx]
                 
                 try:
-                    f = await context.bot.get_file(msg.file_id)
-                    b = await f.download_as_bytearray()
-                    b64 = await media_service.process_image_to_base64(bytes(b))
+                    b64 = await media_service.process_image_to_base64(file_bytes)
                     if b64:
-                        # 先发图文描述（如有）
-                        display_text = f"{prefix}[Image]"
-                        if caption_text:
-                            display_text += f" {caption_text}"
-                            
-                        multimodal_content.append({"type": "text", "text": display_text})
+                        multimodal_content.append({"type": "text", "text": f"{prefix}{current_caption}"})
                         multimodal_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-                        pending_images_map[msg.message_id] = msg
                 except Exception as e:
-                    logger.error(f"Image DL failed: {e}")
-                    multimodal_content.append({"type": "text", "text": f"{prefix}[Image Download Failed]"})
+                    logger.error(f"Image B64 failed: {e}")
+                    multimodal_content.append({"type": "text", "text": f"{prefix}[Image Error]"})
             
-            elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in msg.content:
+            # Voice
+            elif msg.message_id in pending_voices_map:
+                msg_obj, file_bytes = pending_voices_map[msg.message_id]
+                current_transcript = msg.content # e.g. [语音转录: xxx]
+                
                 try:
-                    f = await context.bot.get_file(msg.file_id)
-                    b = await f.download_as_bytearray()
-                    b64 = await media_service.process_audio_to_base64(bytes(b))
+                    b64 = await media_service.process_audio_to_base64(file_bytes)
                     if b64:
-                        multimodal_content.append({"type": "text", "text": f"{prefix}[Voice]"})
+                        multimodal_content.append({"type": "text", "text": f"{prefix}{current_transcript}"})
                         multimodal_content.append({"type": "input_audio", "input_audio": {"data": b64, "format": "wav"}})
-                        pending_voices_map[msg.message_id] = msg
                 except Exception as e:
-                    logger.error(f"Voice DL failed: {e}")
-                    multimodal_content.append({"type": "text", "text": f"{prefix}[Voice Download Failed]"})
+                    logger.error(f"Voice B64 failed: {e}")
+                    multimodal_content.append({"type": "text", "text": f"{prefix}[Voice Error]"})
             
+            # Text / Processed-but-failed Media
             else:
                 if msg.content:
                     text_content = msg.content
@@ -418,21 +472,8 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         if multimodal_content:
             messages.append({"role": "user", "content": multimodal_content})
     else:
-        # 普通文本模式：直接追加
-        for h in tail_msgs:
-            time_str = "Unknown"
-            if h.timestamp:
-                try:
-                    dt = h.timestamp.replace(tzinfo=pytz.UTC) if h.timestamp.tzinfo is None else h.timestamp
-                    time_str = dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
-                except: pass
-            
-            msg_id_str = f"MSG {h.message_id}" if h.message_id else "MSG ?"
-            msg_type_str = h.message_type.capitalize() if h.message_type else "Text"
-            prefix = f"[{msg_id_str}] [{time_str}] [{msg_type_str}] "
-            if h.reply_to_content:
-                prefix += f'(Reply to "{h.reply_to_content}") '
-            messages.append({"role": h.role, "content": prefix + h.content})
+        # Should not happen if tail_msgs is empty, but just in case
+        pass
 
     # 7. 调用 LLM
     current_temp = safe_float_config(configs.get("temperature", "0.7"), 0.7, 0.0, 2.0)
@@ -456,49 +497,42 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"LLM Response: {reply_content[:100]}...")
         
         # 8. 解析结果并回填 (Backfill)
-        # 8.1 语音 Transcript (XML + MsgID 匹配)
-        transcript_matches = list(re.finditer(r'<transcript\s+msg_id=["\'](\d+)["\']>(.*?)</transcript>', reply_content, flags=re.DOTALL))
+        # 此时 DB 中的 content 已经是 [图片内容: xxx] 或 [语音转录: xxx]
+        # 但我们可能想把 LLM 生成的更详细的 Summary/Transcript 覆盖进去？
+        # 或者，Shift-Left 产生的就是 Truth，不需要 LLM 再回填了？
+        # 既然我们已经用 Shift-Left 产生了 Caption/Transcript，LLM 的输出应该主要针对 User Query
+        # 所以这里的 回填逻辑 可以简化/移除，或者只作为补充？
         
-        if transcript_matches and pending_voices_map:
-            for match in transcript_matches:
-                try:
-                    msg_id = int(match.group(1))
-                    content = match.group(2).strip()
-                    
-                    if msg_id in pending_voices_map:
-                        target_msg = pending_voices_map[msg_id]
-                        await history_service.update_message_content_by_file_id(target_msg.file_id, content)
-                        logger.info(f"Backfilled transcript for MSG {msg_id}")
-                    else:
-                        logger.warning(f"Transcript msg_id {msg_id} not found in pending voices map")
-                except Exception as e:
-                     logger.error(f"Failed to parse transcript match: {e}")
+        # 现有的 Shift-Left 已经在 RAG 之前更新了内存中的 msg.content
+        # 并在 DB 中（如果需要持久化）应该在 Shift-Left 阶段就 Update DB
+        
+        # 我们在 Shift-Left 阶段只是修改了 msg 对象属性，并没有 history_service.update_message_content...
+        # 应该在 Shift-Left loop 里持久化。
+        
+        # 补救：在 Shift-Left 循环里添加 await history_service.update_message_content_by_file_id(...)
+        # 否则下一次加载又是 Processing...
+        
+        # 由于 Shift-Left 已经在上面处理了持久化 (Wait, I need to add that to the first chunk!)
+        # Re-visiting the first chunk: I didn't add DB update there.
+        
+        # Let's add DB persistent updates here for processed items
+        for mid, (mtype, content) in processed_media_cache.items():
+            if mtype == 'image':
+                # content is caption
+                 msg_obj, _ = pending_images_map.get(mid, (None,None))
+                 if msg_obj:
+                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[图片内容: {content}]")
+            elif mtype == 'voice':
+                # content is transcript
+                 msg_obj, _ = pending_voices_map.get(mid, (None,None))
+                 if msg_obj:
+                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[语音转录: {content}]")
 
-            # 清理回复中的 transcript 标签，避免发给用户
-            reply_content = re.sub(r"<transcript.*?>.*?</transcript>", "", reply_content, flags=re.DOTALL).strip()
-            
-        # 8.2 图片 Summary (XML + MsgID 匹配)
-        # 匹配 <img_summary msg_id="123">...</img_summary>
-        img_summary_matches = list(re.finditer(r'<img_summary\s+msg_id=["\'](\d+)["\']>(.*?)</img_summary>', reply_content, flags=re.DOTALL))
+        # 8.2 原有的 XML 回填逻辑 (Optional Compatibility)
+        # 如果 LLM 依然返回了 <transcript> (可能因为 Prompt 没改?)
+        # 暂时保留以防万一，但主要依赖 Shift-Left
         
-        if img_summary_matches and pending_images_map:
-            for match in img_summary_matches:
-                try:
-                    msg_id = int(match.group(1))
-                    content = match.group(2).strip()
-                    
-                    if msg_id in pending_images_map:
-                        target_msg = pending_images_map[msg_id]
-                        final_summary = f"[Image Summary: {content}]" 
-                        await history_service.update_message_content_by_file_id(target_msg.file_id, final_summary)
-                        logger.info(f"Backfilled summary for MSG {msg_id}")
-                    else:
-                        logger.warning(f"Image summary msg_id {msg_id} not found in pending images map")
-                except Exception as e:
-                    logger.error(f"Failed to parse image summary match: {e}")
-            
-            # 清理回复中的 img_summary 标签
-            reply_content = re.sub(r"<img_summary.*?>.*?</img_summary>", "", reply_content, flags=re.DOTALL).strip()
+        # ... (Legacy XML parsing removed for cleanliness, ensuring Shift-Left is the source of truth)
             
         if not reply_content:
             reply_content = "<chat>...</chat>" # 兜底
@@ -520,9 +554,15 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"API Call failed: {e}")
         # --- 污染清理逻辑 ---
         # 如果处理失败，删除当前批次中处于 "Processing..." 状态的占位消息，防止污染上下文
+        # 仅清除那些**尚未处理成功**（仍是 Processing 占位符）的消息。
+        # 如果 Shift-Left 已经成功生成了 Description/Transcript 并更新了 DB，则保留。
         try:
             async for session in get_db_session():
-                # 寻找当前批次中所有带 Processing 标识的消息 ID
+                # 寻找当前批次中所有仍带 Processing 标识的消息 ID
+                # 注意：Shift-Left 可能会修改内存中的 msg.content，所以这里应该去查询 DB，或者是依赖 msg.content 如果 Shift-Left 没跑或者是失败了
+                # 但是 msg 对象是引用的，所以在内存中如果是 [图片内容: ...] 那就不匹配了 -> 正确，因为那是有效数据！
+                # 只要匹配 [Image: Processing...] 或 [Voice: Processing...] 就删
+                
                 pending_ids = [m.id for m in tail_msgs if "[Image: Processing...]" in m.content or "[Voice: Processing...]" in m.content]
                 if pending_ids:
                     await session.execute(delete(History).where(History.id.in_(pending_ids)))

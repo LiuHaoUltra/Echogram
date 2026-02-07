@@ -19,6 +19,8 @@
     # 摘要模型
     WAITING_INPUT_SUMMARY_MODEL,
     WIZARD_INPUT_SUMMARY_MODEL,
+    # 媒体模型
+    WAITING_INPUT_MEDIA_MODEL,
     # Token 上限
     WAITING_INPUT_HISTORY_TOKENS,
     # 温度参数
