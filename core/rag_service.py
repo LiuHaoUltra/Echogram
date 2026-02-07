@@ -172,66 +172,6 @@ class RagService:
             logger.error(f"Embedding API failed: {e}")
             raise
 
-    async def _check_and_migrate_status(self, session, chat_id: int):
-        """
-        [One-off Migration] 迁移旧的状态追踪方式 (Zero Vectors) 到新表 (rag_status)
-        """
-        try:
-            # Check if already migrated (any record exists)
-            count_res = await session.execute(
-                text("SELECT 1 FROM rag_status WHERE chat_id=:cid LIMIT 1"), 
-                {"cid": chat_id}
-            )
-            if count_res.scalar():
-                return 
-
-            # Check if legacy data exists
-            legacy_count = await session.execute(
-                text("SELECT COUNT(*) FROM history_vec v JOIN history h ON v.rowid=h.id WHERE h.chat_id=:cid"), 
-                {"cid": chat_id}
-            )
-            if legacy_count.scalar() == 0:
-                return
-
-            logger.warning(f"RAG: Migrating chat {chat_id} to 'rag_status' table...")
-
-            # 1. Identify Tails (Zero Vectors) -> Insert 'TAIL'
-            # Use shotgun strategy to catch any zero vector format
-            await session.execute(text("""
-                INSERT INTO rag_status (msg_id, chat_id, status)
-                SELECT v.rowid, :cid, 'TAIL'
-                FROM history_vec v
-                JOIN history h ON v.rowid = h.id
-                WHERE h.chat_id = :cid
-                  AND (v.embedding LIKE '[0.0, 0.0%' OR v.embedding LIKE '[0.0,0.0%' OR v.embedding LIKE '[0, 0%')
-            """), {"cid": chat_id})
-
-            # 2. Identify Heads (Real Vectors) -> Insert 'HEAD'
-            # Any vector in DB that is NOT in rag_status yet must be a Head
-            await session.execute(text("""
-                INSERT INTO rag_status (msg_id, chat_id, status)
-                SELECT v.rowid, :cid, 'HEAD'
-                FROM history_vec v
-                JOIN history h ON v.rowid = h.id
-                WHERE h.chat_id = :cid
-                  AND v.rowid NOT IN (SELECT msg_id FROM rag_status WHERE chat_id=:cid)
-            """), {"cid": chat_id})
-
-            # 3. Clean up Tails from history_vec (Free up space/indices)
-            await session.execute(text("""
-                DELETE FROM history_vec
-                WHERE rowid IN (
-                    SELECT msg_id FROM rag_status WHERE chat_id=:cid AND status='TAIL'
-                )
-            """), {"cid": chat_id})
-
-            await session.commit()
-            logger.info(f"RAG: Migration completed for chat {chat_id}")
-
-        except Exception as e:
-            logger.error(f"RAG Migration failed: {e}")
-            # Do not re-raise, allow sync to proceed (fallback)
-
     async def run_background_sync(self):
         """
         [ETL Core] 后台同步循环 (The "Cron")

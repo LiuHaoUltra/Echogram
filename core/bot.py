@@ -23,68 +23,7 @@ async def post_init(application: Application):
     
     logger.info("Database initialized successfully.")
     
-    # --- Schema Patch (Fix for message_type missing) ---
-    try:
-        from config.database import get_db_session
-        from sqlalchemy import text
-        async for session in get_db_session():
-            try:
-                # 检查列是否存在 (SQLite)
-                await session.execute(text("SELECT message_type FROM history LIMIT 1"))
-            except Exception:
-                logger.warning("Column 'message_type' missing in 'history'. Applying patch...")
-                # SQLite 不支持 IF NOT EXISTS COLUMN，捕获异常即代表需要添加
-                try:
-                    await session.execute(text("ALTER TABLE history ADD COLUMN message_type VARCHAR(10) DEFAULT 'text'"))
-                    await session.commit()
-                    logger.info("Schema patch applied: 'message_type' column added.")
-                except Exception as e:
-                    logger.error(f"Failed to apply schema patch: {e}")
-            break # 用完即弃
-    except Exception as e:
-        logger.error(f"Schema check failed: {e}")
-
-    # --- Schema Patch (Fix for file_id missing) ---
-    try:
-        from config.database import get_db_session
-        from sqlalchemy import text
-        async for session in get_db_session():
-            try:
-                # 检查列是否存在 (SQLite)
-                await session.execute(text("SELECT file_id FROM history LIMIT 1"))
-            except Exception:
-                logger.warning("Column 'file_id' missing in 'history'. Applying patch...")
-                try:
-                    await session.execute(text("ALTER TABLE history ADD COLUMN file_id VARCHAR(255)"))
-                    await session.commit()
-                    logger.info("Schema patch applied: 'file_id' column added.")
-                except Exception as e:
-                    logger.error(f"Failed to apply schema patch (file_id): {e}")
-            break # 用完即弃
-    except Exception as e:
-        logger.error(f"Schema check (file_id) failed: {e}")
-
-    # --- Schema Patch (Fix for denoised_content missing in RAG v2) ---
-    try:
-        from config.database import get_db_session
-        from sqlalchemy import text
-        async for session in get_db_session():
-            try:
-                # Check if column exists
-                await session.execute(text("SELECT denoised_content FROM rag_status LIMIT 1"))
-            except Exception:
-                logger.warning("Column 'denoised_content' missing in 'rag_status'. Applying patch...")
-                try:
-                    await session.execute(text("ALTER TABLE rag_status ADD COLUMN denoised_content TEXT"))
-                    await session.commit()
-                    logger.info("Schema patch applied: 'denoised_content' column added.")
-                except Exception as e:
-                    logger.error(f"Failed to apply schema patch (denoised_content): {e}")
-            break
-    except Exception as e:
-        logger.error(f"Schema check (denoised_content) failed: {e}")
-    # ---------------------------------------------------
-    # ---------------------------------------------------
+    logger.info("Database initialized successfully.")
     
     # 确认连接
     bot_info = await application.bot.get_me()
