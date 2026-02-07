@@ -273,16 +273,16 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     processed_media_cache[msg.message_id] = ("image", caption)
                     
                     # 2. Update Content in Object (Temporary for RAG)
-                    # 原 content: [Image: Processing...]xxx
-                    # 新 content: [图片内容: caption]
-                    msg.content = f"[图片内容: {caption}]"
+                    # Legacy Format: [Image Summary: caption]
+                    # This matches rag_service.sanitize_content logic
+                    msg.content = f"[Image Summary: {caption}]"
                     
                     # 3. Store for later rendering
                     pending_images_map[msg.message_id] = (msg, file_bytes)
                     
                 except Exception as e:
                     logger.error(f"Shift-Left Image failed: {e}")
-                    msg.content = "[图片处理失败]"
+                    msg.content = "[Image Summary: Analyze Failed]"
 
             # Voice Processing
             elif msg.message_type == 'voice' and msg.file_id and "[Voice: Processing...]" in msg.content:
@@ -296,14 +296,16 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     processed_media_cache[msg.message_id] = ("voice", transcript)
                     
                     # 2. Update Content
-                    msg.content = f"[语音转录: {transcript}]"
+                    # Voice requests typically just replace the placeholder with the text
+                    # No [Voice Transcript:] wrapper needed for clean history
+                    msg.content = transcript
                     
                     # 3. Store
                     pending_voices_map[msg.message_id] = (msg, file_bytes)
                     
                 except Exception as e:
                     logger.error(f"Shift-Left Voice failed: {e}")
-                    msg.content = "[语音处理失败]"
+                    msg.content = "[Voice Transcript Failed]"
 
         # --- RAG Search ---
         # 移到锁内执行，确保使用最新的 embeddings
@@ -436,7 +438,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             if msg.message_id in pending_images_map:
                 msg_obj, file_bytes = pending_images_map[msg.message_id]
                 # 获取之前 Shift-Left 生成的 Caption (存在 msg.content 里了)
-                current_caption = msg.content # e.g. [图片内容: xxx]
+                current_caption = msg.content # e.g. [Image Summary: xxx]
                 
                 try:
                     b64 = await media_service.process_image_to_base64(file_bytes)
@@ -450,7 +452,7 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             # Voice
             elif msg.message_id in pending_voices_map:
                 msg_obj, file_bytes = pending_voices_map[msg.message_id]
-                current_transcript = msg.content # e.g. [语音转录: xxx]
+                current_transcript = msg.content # e.g. 啥玩意儿啊
                 
                 try:
                     b64 = await media_service.process_audio_to_base64(file_bytes)
@@ -521,12 +523,13 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                 # content is caption
                  msg_obj, _ = pending_images_map.get(mid, (None,None))
                  if msg_obj:
-                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[图片内容: {content}]")
+                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[Image Summary: {content}]")
             elif mtype == 'voice':
                 # content is transcript
                  msg_obj, _ = pending_voices_map.get(mid, (None,None))
                  if msg_obj:
-                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[语音转录: {content}]")
+                     # For voice, we usually just store the text
+                    await history_service.update_message_content_by_file_id(msg_obj.file_id, content)
 
         # 8.2 原有的 XML 回填逻辑 (Optional Compatibility)
         # 如果 LLM 依然返回了 <transcript> (可能因为 Prompt 没改?)
