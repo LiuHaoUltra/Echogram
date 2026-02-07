@@ -50,6 +50,7 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
     base_url = configs.get("api_base_url", "未设置")
     if len(base_url) > 50: base_url = base_url[:47] + "..."
         
+    model = configs.get("model_name", "gpt-3.5-turbo")
     if len(model) > 30: model = model[:27] + "..."
 
     media_model = configs.get("media_model")
