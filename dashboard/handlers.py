@@ -50,8 +50,14 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
     base_url = configs.get("api_base_url", "未设置")
     if len(base_url) > 50: base_url = base_url[:47] + "..."
         
-    model = configs.get("model_name", "gpt-3.5-turbo")
     if len(model) > 30: model = model[:27] + "..."
+
+    media_model = configs.get("media_model")
+    if not media_model:
+        media_model_disp = "<i>(Default)</i>"
+    else:
+        if len(media_model) > 30: media_model = media_model[:27] + "..."
+        media_model_disp = f"<code>{media_model}</code>"
 
     summary_model = configs.get("summary_model_name")
     if not summary_model:
@@ -83,6 +89,7 @@ async def get_dashboard_overview_text(chat_id: int = 0) -> str:
         "📊 <b>系统参数</b>\n"
         f"• Base URL: <code>{base_url}</code>\n"
         f"• Main Model: <code>{model}</code>\n"
+        f"• Media Model: <code>{media_model_disp}</code>\n"
         f"• Summary Model: {summary_model_disp}\n"
         f"• Vector Model: <code>{vector_model}</code>\n"
         f"• Aggregation Latency: <code>{latency} s</code>\n"
