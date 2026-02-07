@@ -61,6 +61,11 @@ def get_dashboard_handlers():
             WAITING_INPUT_TTS_LANG: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_lang_input)],
             WAITING_INPUT_TTS_PROMPT_LANG: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_prompt_lang_input)],
             WAITING_INPUT_TTS_SPEED: [MessageHandler(filters.TEXT & ~filters.COMMAND, voice_input_handlers.handle_tts_speed_input)],
+            # Media Model
+            WAITING_INPUT_MEDIA_MODEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^/'), model_handlers.perform_model_search), # Allow search
+                CallbackQueryHandler(model_handlers.handle_model_callback)
+            ],
             # RAG Settings
             WAITING_INPUT_RAG_COOLDOWN: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_rag_cooldown)],
             WAITING_INPUT_RAG_THRESHOLD: [MessageHandler(filters.TEXT & ~filters.COMMAND, input_handlers.save_rag_threshold)]
