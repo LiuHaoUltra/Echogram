@@ -299,22 +299,33 @@ class RagService:
             candidate_ids = [r.id for r in cand_res.fetchall()]
             
             if not candidate_ids:
-                # --- 诊断逻辑：如果 pending > 0 但没有 assistant 候选，说明确实是孤儿消息 ---
+                # --- 诊断与自动清理逻辑 ---
+                # 1. 查找 Barrier 以下的所有未处理消息
                 stmt_pending_all = text("""
                     SELECT h.id, h.role, SUBSTR(h.content, 1, 50) as snippet 
                     FROM history h
                     LEFT JOIN rag_status s ON h.id = s.msg_id
                     WHERE h.chat_id = :cid AND h.id < :barrier AND s.msg_id IS NULL
-                    LIMIT 20
+                    LIMIT 50
                 """)
                 res = await session.execute(stmt_pending_all, {"cid": chat_id, "barrier": active_window_start_id})
-                orphans = res.fetchall()
-                if orphans:
-                    logger.warning(f"RAG ETL: Found {len(orphans)} unprocessable messages (no assistant anchor) in Chat {chat_id}.")
-                    diagnosis = f"🕵️ <b>ETL 诊断 [Chat {chat_id}]</b>\n发现 {len(orphans)} 条待处理但无法自动入库的消息（缺少 AI 回复作为锚点）：\n"
-                    for o in orphans:
-                        diagnosis += f"• ID:{o.id} [{o.role}] {html.escape(o.snippet)}...\n"
-                    await self._notify_admin(diagnosis)
+                all_orphans = res.fetchall()
+                
+                if all_orphans:
+                    processed_ids = []
+                    # 2. 自动清理: System 消息直接标记 SKIPPED, 距离 Barrier 太远(>30)的用户消息标记 SKIPPED
+                    for o in all_orphans:
+                        if o.role == 'system' or (active_window_start_id - o.id > 30):
+                            await session.execute(
+                                text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status, processed_at) VALUES (:id, :cid, 'SKIPPED', CURRENT_TIMESTAMP)"),
+                                {"id": o.id, "cid": chat_id}
+                            )
+                            processed_ids.append(o.id)
+                    
+                    if processed_ids:
+                        await session.commit()
+                        logger.info(f"RAG ETL: Auto-cleaned {len(processed_ids)} orphans (System/Old) for Chat {chat_id}.")
+                        await self._notify_admin(f"🧹 <b>ETL 自动清理 [Chat {chat_id}]</b>\n已清理 {len(processed_ids)} 条系统/过时消息（这些消息通常不含 RAG 价值）。")
                 return
 
             logger.info(f"RAG ETL: Chat {chat_id} has {len(candidate_ids)} candidates falling out of context (barrier: {active_window_start_id}).")
@@ -414,10 +425,22 @@ class RagService:
                 search_idx = i - 1
                 break
         
-        while search_idx >= 0 and rows[search_idx].role == 'user':
-            user_ids.insert(0, rows[search_idx].id) # Prepend
-            user_content.insert(0, rows[search_idx].content)
-            search_idx -= 1
+        while search_idx >= 0:
+            if rows[search_idx].role == 'user':
+                user_ids.insert(0, rows[search_idx].id) # Prepend
+                user_content.insert(0, rows[search_idx].content)
+                search_idx -= 1
+            elif rows[search_idx].role == 'system':
+                # 遇到系统消息 (例如 Reaction)，标记为 TAIL/SKIPPED 并继续向前回溯
+                # 这解决了系统消息打断用户消息链的问题
+                await session.execute(
+                    text("INSERT OR IGNORE INTO rag_status (msg_id, chat_id, status, processed_at) VALUES (:id, :cid, 'SKIPPED', CURRENT_TIMESTAMP)"),
+                    {"id": rows[search_idx].id, "cid": chat_id}
+                )
+                search_idx -= 1
+            else:
+                # 遇到其他角色 (通常是上一轮的 Assistant)，停止回溯
+                break
             
         # Assembly
         full_user_text = "\n".join(user_content)
