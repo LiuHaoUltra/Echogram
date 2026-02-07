@@ -24,6 +24,21 @@ class RagService:
         self._current_api_key = None
         self._current_base_url = None
         self._sync_cooldowns: Dict[int, float] = {}  # chat_id -> last_failure_time
+
+    async def _notify_admin(self, text: str):
+        """发送私信给管理员 (内部调试/透明化使用)"""
+        from core.bot import bot
+        if bot and settings.ADMIN_USER_ID:
+            try:
+                # 尽量保持静默，如果报错也不阻塞主流程
+                await bot.send_message(
+                    chat_id=settings.ADMIN_USER_ID,
+                    text=text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True
+                )
+            except Exception as e:
+                logger.error(f"ETL Notify Admin failed: {e}")
     
     async def _get_client(self):
         """获取或初始化 OpenAI Client (支持动态配置更新)"""
@@ -284,6 +299,22 @@ class RagService:
             candidate_ids = [r.id for r in cand_res.fetchall()]
             
             if not candidate_ids:
+                # --- 诊断逻辑：如果 pending > 0 但没有 assistant 候选，说明确实是孤儿消息 ---
+                stmt_pending_all = text("""
+                    SELECT h.id, h.role, SUBSTR(h.content, 1, 50) as snippet 
+                    FROM history h
+                    LEFT JOIN rag_status s ON h.id = s.msg_id
+                    WHERE h.chat_id = :cid AND h.id < :barrier AND s.msg_id IS NULL
+                    LIMIT 20
+                """)
+                res = await session.execute(stmt_pending_all, {"cid": chat_id, "barrier": active_window_start_id})
+                orphans = res.fetchall()
+                if orphans:
+                    logger.warning(f"RAG ETL: Found {len(orphans)} unprocessable messages (no assistant anchor) in Chat {chat_id}.")
+                    diagnosis = f"🕵️ <b>ETL 诊断 [Chat {chat_id}]</b>\n发现 {len(orphans)} 条待处理但无法自动入库的消息（缺少 AI 回复作为锚点）：\n"
+                    for o in orphans:
+                        diagnosis += f"• ID:{o.id} [{o.role}] {html.escape(o.snippet)}...\n"
+                    await self._notify_admin(diagnosis)
                 return
 
             logger.info(f"RAG ETL: Chat {chat_id} has {len(candidate_ids)} candidates falling out of context (barrier: {active_window_start_id}).")
@@ -439,6 +470,16 @@ class RagService:
 
         await session.commit()
         logger.info(f"RAG ETL: Indexed Turn {real_head_id} (User: {len(user_ids)}, AI: {len(ai_ids)})")
+        
+        # 7. 通知管理员
+        msg = (
+            f"✅ <b>RAG ETL 完成</b>\n"
+            f"📍 Chat: <code>{chat_id}</code>\n"
+            f"🔗 Turn Head: {real_head_id}\n\n"
+            f"<b>🧠 事实化内容 (Denoised):</b>\n"
+            f"<code>{html.escape(denoised_text)}</code>"
+        )
+        await self._notify_admin(msg)
 
     async def contextualize_query(self, query_text: str, conversation_history: str, long_term_summary: str = "") -> str:
         """
