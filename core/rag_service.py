@@ -17,7 +17,7 @@ class RagService:
     # 默认配置常量
     DEFAULT_SIMILARITY_THRESHOLD = 0.6
     DEFAULT_TOP_K = 5
-    SYNC_COOLDOWN_SECONDS = 180  # 3分钟熔断冷却
+    SYNC_COOLDOWN_SECONDS = 60 # 每 2 分钟触发主循环，每 1 分钟允许单个 Chat 重爬
 
     def __init__(self):
         self._client = None

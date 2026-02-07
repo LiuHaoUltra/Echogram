@@ -103,7 +103,7 @@ async def post_init(application: Application):
         )
         logger.info("NewsPush: Scheduler registered (Interval: 3600s)")
 
-        # 2. RAG Background Sync (Every 5 min)
+        # 2. RAG Background Sync (Every 2 min)
         # Wrapper to match JobQueue signature
         async def rag_sync_wrapper(context):
             from core.rag_service import rag_service
@@ -111,11 +111,11 @@ async def post_init(application: Application):
 
         application.job_queue.run_repeating(
             rag_sync_wrapper, 
-            interval=300, 
+            interval=120, 
             first=30, 
             name="rag_sync_loop"
         )
-        logger.info("RAG Sync: Scheduler registered (Interval: 300s)")
+        logger.info("RAG Sync: Scheduler registered (Interval: 120s)")
     else:
         logger.warning("JobQueue not available! RAG & NewsPush will not auto-run.")
 
