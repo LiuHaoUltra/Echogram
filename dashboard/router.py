@@ -14,7 +14,7 @@ def get_dashboard_handlers():
     """
     
     # 匹配入口按钮
-    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_vector_model|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_tts_url|set_tts_ref_audio|set_tts_ref_text|set_tts_lang|set_tts_speed|trigger_set_rag_cd|trigger_set_rag_th|set_tts_prompt_lang)$"
+    entry_pattern = "^(set_api_url|set_api_key|set_model_name|set_vector_model|set_sys_prompt|add_whitelist_id|remove_whitelist_id|set_aggregation_latency|set_context_limit|set_history_tokens|set_summary_model|set_temperature|add_sub_request|set_active_time|set_idle_time|set_tts_url|set_tts_ref_audio|set_tts_ref_text|set_tts_lang|set_tts_speed|trigger_set_rag_cd|trigger_set_rag_th|set_tts_prompt_lang|set_media_model)$"
 
     conv_handler = ConversationHandler(
         entry_points=[
