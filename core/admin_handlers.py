@@ -1,5 +1,6 @@
-from telegram import Update, constants
-from telegram.ext import ContextTypes
+from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ContextTypes, ConversationHandler
+from telegram.constants import ParseMode, ChatType
 from core.history_service import history_service
 from core.secure import is_admin, require_admin_access
 from utils.logger import logger
