@@ -76,23 +76,24 @@ def run_bot():
         .build()
 
     # ---------------------------------------------------------
-    # ---------------------------------------------------------
     # 注册处理器
     # ---------------------------------------------------------
-    # Dashboard 处理器 (高优先级)
+    # 1. Admin Callbacks (最高优先级，防止被 Dashboard Catch-all 拦截)
+    from core.admin_handlers import admin_action_callback
+    from telegram.ext import CallbackQueryHandler
+    application.add_handler(CallbackQueryHandler(admin_action_callback, pattern="^admin:"))
+
+    # 2. Dashboard 处理器 (包含 wizard, menu navigation 等)
     from dashboard.router import get_dashboard_handlers
     application.add_handlers(get_dashboard_handlers())
     
-    # Admin 处理器
+    # 3. Admin Commands
     from core.admin_handlers import (
         reset_command, stats_command, prompt_command, 
         debug_command, add_whitelist_command, remove_whitelist_command,
         sub_command, push_now_command,
-        edit_command, delete_command, admin_action_callback # New
+        edit_command, delete_command
     )
-    # 注册 Admin Callback (必须在 Chat Engine 之前)
-    from telegram.ext import CallbackQueryHandler
-    application.add_handler(CallbackQueryHandler(admin_action_callback, pattern="^admin:"))
 
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("stats", stats_command))
