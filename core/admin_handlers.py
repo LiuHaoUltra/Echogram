@@ -469,11 +469,21 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Strict Check: Can only edit Bot messages
-    # Role is usually 'assistant' or 'model' in DB, but let's check broadly
-    # Actually, the user says "edit command can ONLY edit bot's OWN messages".
-    # So if role is 'user', reject.
     if msg_obj.role == "user":
         await update.message.reply_text("❌ 只能修改 Bot 发送的消息，无法修改用户的发言。", parse_mode='Markdown')
+        return
+
+    # Check Archival Status (Cannot edit archived messages)
+    from core.summary_service import summary_service
+    status = await summary_service.get_status(chat.id)
+    last_archived_id = status["last_id"]
+    
+    if msg_obj.id <= last_archived_id:
+        await update.message.reply_text(
+            f"❌ 消息已归档 (ID {msg_obj.id} <= {last_archived_id})，无法修改。\n"
+            "因为该消息已被压缩进长期记忆摘要，修改源文件会导致记忆不一致。",
+            parse_mode='HTML'
+        )
         return
 
     # Generate Confirmation
@@ -484,6 +494,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "user_id": user.id,
         "target_db_id": msg_obj.id,
         "target_msg_id": msg_obj.message_id, # for TG edit
+        "message_type": msg_obj.message_type or "text", # Pass type
         "is_bot_msg": (msg_obj.role == "assistant" or str(msg_obj.role).lower() == "bot"), # approximate check
         "old_content": msg_obj.content,
         "new_content": new_content,
@@ -494,8 +505,12 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     old_preview = html.escape(msg_obj.content[:200]) + "..." if len(msg_obj.content) > 200 else html.escape(msg_obj.content)
     new_preview = html.escape(new_content[:200]) + "..." if len(new_content) > 200 else html.escape(new_content)
     
+    type_warn = ""
+    if msg_obj.message_type == "voice":
+        type_warn = "\n⚠️ <b>语音消息:</b> 将修改其附言 (Caption)，同时修正数据库记录。\n"
+
     text = (
-        f"✏️ <b>确认修改消息 [{target_id}]？</b>\n\n"
+        f"✏️ <b>确认修改消息 [{target_id}]？</b>\n{type_warn}\n"
         f"🔻 <b>原文</b>:\n<pre>{old_preview}</pre>\n\n"
         f"🔺 <b>新文</b>:\n<pre>{new_preview}</pre>"
     )
@@ -709,10 +724,33 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             # Skip invalid IDs (No Blind Delete)
             continue
-
+            
+    # Check Archival Rules
+    from core.summary_service import summary_service
+    status = await summary_service.get_status(chat.id)
+    last_archived_id = status["last_id"]
+    
+    final_targets = []
+    skipped_archived_count = 0
+    
+    for t in valid_targets:
+        if t["db_id"] <= last_archived_id:
+            skipped_archived_count += 1
+        else:
+            final_targets.append(t)
+    
+    valid_targets = final_targets
+    
     if not valid_targets:
-        await update.message.reply_text("⚠️ 未找到任何匹配的消息记录 (所有 ID 均无效)。")
+        if skipped_archived_count > 0:
+            await update.message.reply_text(f"⚠️ 所有选中消息均已归档 (Archived)，为了保持记忆完整性，系统禁止删除已总结的历史。")
+        else:
+            await update.message.reply_text("⚠️ 未找到任何匹配的消息记录 (所有 ID 均无效)。")
         return
+    
+    warning_suffix = ""
+    if skipped_archived_count > 0:
+        warning_suffix = f"\n\n🚫 <b>已自动排除 {skipped_archived_count} 条归档消息</b> (只能删除流动窗口内的消息)"
 
     # Init State
     confirm_id = str(uuid.uuid4())[:8]
@@ -726,6 +764,11 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Render Page 0
     text, markup = _render_delete_view(confirm_id, page=0)
+    
+    if warning_suffix:
+        # Append warning to first page text
+        text += warning_suffix
+        
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 
@@ -842,6 +885,7 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         db_id = state["target_db_id"]
         msg_id = state["target_msg_id"]
         new_content = state["new_content"]
+        msg_type = state.get("message_type", "text") # Get type
         
         # 1. DB Update
         db_ok = await history_service.update_message_content_by_db_id(db_id, new_content, chat_id=chat_id)
@@ -850,21 +894,43 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("❌ 数据库更新失败 (可能已被删除)")
             return
 
-        # 2. TG Update
+        # 2. TG Update (Skip if voice)
         tg_ok = False
         fail_reason = ""
-        if msg_id:
+        
+        if msg_type == "voice":
             try:
-                await context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=new_content)
+                # Update Caption (Limit 1024 chars for Caption)
+                safe_caption = new_content[:1024]
+                await context.bot.edit_message_caption(chat_id=chat_id, message_id=msg_id, caption=safe_caption)
                 tg_ok = True
+                tg_skip_msg = ""
             except Exception as e:
                 fail_reason = str(e)
                 if "Message is not modified" in str(e):
                     tg_ok = True
+                    
+        elif msg_id:
+            try:
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=new_content)
+                tg_ok = True
+                tg_skip_msg = ""
+            except Exception as e:
+                fail_reason = str(e)
+                if "Message is not modified" in str(e):
+                    tg_ok = True
+        else:
+            tg_skip_msg = " (无 MsgID)"
         
         if tg_ok:
-            await query.edit_message_text(f"✅ <b>完美同步</b>: 记忆与消息均已修正。", parse_mode='HTML')
+            if msg_type == "voice":
+                await query.edit_message_text(f"✅ <b>完美同步</b>: 听写已存入数据库，语音附言已更新。", parse_mode='HTML')
+            else:
+                await query.edit_message_text(f"✅ <b>完美同步</b>: 记忆与消息均已修正。", parse_mode='HTML')
         else:
-            await query.edit_message_text(f"✅ <b>记忆已修正</b> (物理消息未变: {fail_reason})", parse_mode='HTML')
+            if msg_type == "voice":
+                await query.edit_message_text(f"✅ <b>听写已修正</b> (附言更新失败: {fail_reason})", parse_mode='HTML')
+            else:
+                await query.edit_message_text(f"✅ <b>记忆已修正</b> (物理消息未变: {fail_reason})", parse_mode='HTML')
 
 
