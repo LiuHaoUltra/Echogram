@@ -463,6 +463,14 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 未找到 ID 为 `{target_id}` 的消息 (在此会话中)。", parse_mode='Markdown')
         return
 
+    # Strict Check: Can only edit Bot messages
+    # Role is usually 'assistant' or 'model' in DB, but let's check broadly
+    # Actually, the user says "edit command can ONLY edit bot's OWN messages".
+    # So if role is 'user', reject.
+    if msg_obj.role == "user":
+        await update.message.reply_text("❌ 只能修改 Bot 发送的消息，无法修改用户的发言。", parse_mode='Markdown')
+        return
+
     # Generate Confirmation
     confirm_id = str(uuid.uuid4())[:8]
     PENDING_CONFIRMATIONS[confirm_id] = {
@@ -549,10 +557,134 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ 用法: `/del <ID> [ID] [Start-End]` (空格分隔)", parse_mode='Markdown')
         return
 
-    # Preview Logic
-    sorted_ids = sorted(list(target_ids))
+# --- Helper for Delete Confirmation UI ---
+def _render_delete_view(confirm_id: str, page: int = 0):
+    """
+    Render text and keyboard for a specific page of delete confirmation.
+    Returns: (text, reply_markup) or None if state invalid
+    """
+    state = PENDING_CONFIRMATIONS.get(confirm_id)
+    if not state: return None, None
+    
+    targets = state["targets"]
+    total_items = len(targets)
+    items_per_page = 10
+    total_pages = (total_items + items_per_page - 1) // items_per_page
+    
+    # Ensure page is valid
+    if page < 0: page = 0
+    if page >= total_pages: page = total_pages - 1
+    
+    # Slice items
+    start = page * items_per_page
+    end = start + items_per_page
+    page_items = targets[start:end]
+    
+    # Text Body
     preview_lines = []
-    valid_targets = [] # List of {"db_id": int, "msg_id": int}
+    for item in page_items:
+        # Format: • 101|102 [user]: content...
+        preview_lines.append(f"• <code>{item['db_id']}|{item['msg_id']}</code> [{item['role']}]: {item['preview']}")
+        
+    preview_text = "\n".join(preview_lines)
+    
+    header = f"🗑️ <b>确认删除消息 ({total_items}条)</b>"
+    if total_pages > 1:
+        header += f" [Page {page+1}/{total_pages}]"
+        
+    text = (
+        f"{header}\n\n"
+        f"{preview_text}\n\n"
+        f"⚠️ 操作将物理删除数据库记录与群消息。"
+    )
+    
+    # Keyboard
+    keyboard = []
+    
+    # Navigation Row (Only if needed)
+    if total_pages > 1:
+        nav_row = []
+        # Previous
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin:page:{confirm_id}:{page-1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("Wait", callback_data="admin:ignore")) # Placeholder
+            
+        # Page Indicator (Middle)
+        nav_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="admin:ignore"))
+        
+        # Next
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin:page:{confirm_id}:{page+1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("End", callback_data="admin:ignore")) # Placeholder
+            
+        keyboard.append(nav_row)
+        
+    # Action Row
+    action_row = [
+        InlineKeyboardButton(f"✅ 确认全部 ({total_items})", callback_data=f"admin:confirm:{confirm_id}"),
+        InlineKeyboardButton("❌ 取消", callback_data=f"admin:cancel:{confirm_id}")
+    ]
+    keyboard.append(action_row)
+    
+    return text, InlineKeyboardMarkup(keyboard)
+
+@require_admin_access
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /del 指令：删除历史消息
+    用法: 
+    - /del <ID> (单个)
+    - /del <ID> <ID> ... (空格分隔)
+    - /del <ID> ... <Start>-<End> ... (混合范围)
+    - 回复某条消息并发送 /del
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    # 鉴权移至装饰器
+
+    target_ids = set()
+    
+    # 场景 1: 回复引用 (优先处理)
+    if update.message.reply_to_message:
+        target_ids.add(update.message.reply_to_message.message_id)
+
+    # 场景 2: 参数解析
+    if context.args:
+        raw_args = " ".join(context.args)
+        normalized = raw_args.replace(" ", ",") 
+        parts = [p.strip() for p in normalized.split(",") if p.strip()]
+        
+        for part in parts:
+            if "-" in part:
+                try:
+                    start_s, end_s = part.split("-", 1)
+                    start, end = int(start_s), int(end_s)
+                    if start > end: start, end = end, start
+                    if (end - start) > 100:
+                        await update.message.reply_text(f"⚠️ 范围过大 ({part})，单次限制 100 条。已跳过。")
+                        continue
+                    for i in range(start, end + 1):
+                        target_ids.add(i)
+                except ValueError:
+                    continue
+            else:
+                try:
+                    clean_part = part.replace("/", "")
+                    if not clean_part: continue
+                    target_ids.add(int(clean_part))
+                except ValueError:
+                    continue
+
+    if not target_ids:
+        await update.message.reply_text("❌ 用法: `/del <ID> [ID] [Start-End]` (空格分隔)", parse_mode='Markdown')
+        return
+
+    # Preview Logic (Fetch & Validate)
+    sorted_ids = sorted(list(target_ids))
+    valid_targets = [] # List of {"db_id": int, "msg_id": int, "role": str, "preview": str}
     
     for tid in sorted_ids:
         # Resolve ID
@@ -563,22 +695,21 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if msg_obj:
             import html
             content_snippet = html.escape(msg_obj.content[:50].replace("\n", " "))
-            preview_lines.append(f"• <code>{msg_obj.id}|{msg_obj.message_id}</code> [{msg_obj.role}]: {content_snippet}")
-            valid_targets.append({"db_id": msg_obj.id, "msg_id": msg_obj.message_id})
+            valid_targets.append({
+                "db_id": msg_obj.id, 
+                "msg_id": msg_obj.message_id,
+                "role": msg_obj.role,
+                "preview": content_snippet
+            })
         else:
-            # Blind ID removed: only manage messages present in DB
+            # Skip invalid IDs (No Blind Delete)
             continue
 
     if not valid_targets:
         await update.message.reply_text("⚠️ 未找到任何匹配的消息记录 (所有 ID 均无效)。")
         return
 
-    # Truncate preview if too long
-    if len(preview_lines) > 10:
-        preview_text = "\n".join(preview_lines[:10]) + f"\n... (and {len(preview_lines)-10} more)"
-    else:
-        preview_text = "\n".join(preview_lines)
-
+    # Init State
     confirm_id = str(uuid.uuid4())[:8]
     PENDING_CONFIRMATIONS[confirm_id] = {
         "type": "delete",
@@ -588,26 +719,15 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "timestamp": 0
     }
 
-    text = (
-        f"🗑️ <b>确认删除以下 {len(valid_targets)} 条消息？</b>\n\n"
-        f"{preview_text}\n\n"
-        f"⚠️ 操作将物理删除数据库记录与群消息。"
-    )
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ 确认删除", callback_data=f"admin:confirm:{confirm_id}"),
-            InlineKeyboardButton("❌ 取消", callback_data=f"admin:cancel:{confirm_id}")
-        ]
-    ]
-
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+    # Render Page 0
+    text, markup = _render_delete_view(confirm_id, page=0)
+    await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 
 async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     处理 /del 和 /edit 的确认回调
-    Data: admin:confirm:<uuid> or admin:cancel:<uuid>
+    Data: admin:<action>:<uuid>[:arg]
     """
     query = update.callback_query
     user = update.effective_user
@@ -618,14 +738,22 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     parts = data.split(":")
-    action = parts[1] # confirm, cancel
+    action = parts[1] # confirm, cancel, page, ignore
+    
+    if action == "ignore":
+        await query.answer()
+        return
+        
     confirm_id = parts[2]
     
     # Retrieve State
     state = PENDING_CONFIRMATIONS.get(confirm_id)
     if not state:
-        await query.answer("⚠️ 操作已过期或不存在", show_alert=True)
-        await query.edit_message_text("❌ 操作已过期")
+        await query.answer("⚠️ 操作已过期", show_alert=True)
+        try:
+            await query.edit_message_text("❌ 操作已过期 (State Lost)")
+        except:
+            pass
         return
 
     # Verify User
@@ -633,7 +761,20 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("❌ 只能由指令发起人操作", show_alert=True)
         return
 
-    # cleanup state immediately (prevent double click)
+    # Handle Paging (No state cleanup yet)
+    if action == "page":
+        new_page = int(parts[3])
+        text, markup = _render_delete_view(confirm_id, page=new_page)
+        if text:
+            await query.answer() # Ack
+            try:
+                await query.edit_message_text(text, reply_markup=markup, parse_mode='HTML')
+            except Exception as e:
+                # Message not modified error is common if clicking same page logic
+                pass
+        return
+
+    # Handle Final Actions (Confirm/Cancel) --> Cleanup State
     del PENDING_CONFIRMATIONS[confirm_id]
 
     if action == "cancel":
@@ -641,7 +782,7 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(f"❌ 操作已取消 (By {user.first_name})")
         return
 
-    await query.answer("处理中...")
+    await query.answer("Processing...")
     
     # Execute Action
     if state["type"] == "delete":
@@ -654,7 +795,7 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         
         for t in targets:
             db_id = t["db_id"]
-            msg_id = t["msg_id"] # Can be same as db_id if blind
+            msg_id = t["msg_id"]
             
             # 1. TG Delete
             tg_ok = False
@@ -691,6 +832,7 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(report, parse_mode='HTML')
 
     elif state["type"] == "edit":
+        # Edit logic unchanged
         chat_id = state["chat_id"]
         db_id = state["target_db_id"]
         msg_id = state["target_msg_id"]
