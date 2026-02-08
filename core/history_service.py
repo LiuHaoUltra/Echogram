@@ -2,6 +2,9 @@ import tiktoken
 from sqlalchemy import select, delete, update
 from config.database import get_db_session
 from models.history import History
+from sqlalchemy import select, desc, delete, func, update, and_
+from utils.logger import logger
+from typing import Optional
 
 class HistoryService:
     _encoding = None

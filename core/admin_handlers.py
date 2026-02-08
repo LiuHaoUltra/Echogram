@@ -424,12 +424,16 @@ async def push_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Push Now Failed: {e}")
         await update.message.reply_text(f"❌ 执行出错: {e}")
 
+
+# 简单的内存状态管理 (Key: UUID)
+import uuid
+PENDING_CONFIRMATIONS = {}
+
 @require_admin_access
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /edit 指令：修改历史消息
     用法: /edit <ID> <NewContent>
-    ID 优先尝试 DB ID，其次 Message ID
     """
     user = update.effective_user
     chat = update.effective_chat
@@ -458,33 +462,39 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 未找到 ID 为 `{target_id}` 的消息 (在此会话中)。", parse_mode='Markdown')
         return
 
-    # 1. Update DB
-    db_success = await history_service.update_message_content_by_db_id(msg_obj.id, new_content, chat_id=chat.id)
+    # Generate Confirmation
+    confirm_id = str(uuid.uuid4())[:8]
+    PENDING_CONFIRMATIONS[confirm_id] = {
+        "type": "edit",
+        "chat_id": chat.id,
+        "user_id": user.id,
+        "target_db_id": msg_obj.id,
+        "target_msg_id": msg_obj.message_id, # for TG edit
+        "is_bot_msg": (msg_obj.role == "assistant" or str(msg_obj.role).lower() == "bot"), # approximate check
+        "old_content": msg_obj.content,
+        "new_content": new_content,
+        "timestamp": 0 # TODO: cleanup
+    }
     
-    if not db_success:
-        await update.message.reply_text(f"❌ 数据库更新失败 (ID: {target_id})。", parse_mode='Markdown')
-        return
+    import html
+    old_preview = html.escape(msg_obj.content[:200]) + "..." if len(msg_obj.content) > 200 else html.escape(msg_obj.content)
+    new_preview = html.escape(new_content[:200]) + "..." if len(new_content) > 200 else html.escape(new_content)
+    
+    text = (
+        f"✏️ <b>确认修改消息 [{target_id}]？</b>\n\n"
+        f"🔻 <b>原文</b>:\n<pre>{old_preview}</pre>\n\n"
+        f"🔺 <b>新文</b>:\n<pre>{new_preview}</pre>"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ 确认修改", callback_data=f"admin:confirm:{confirm_id}"),
+            InlineKeyboardButton("❌ 取消", callback_data=f"admin:cancel:{confirm_id}")
+        ]
+    ]
+    
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
-    # 2. Try Update TG Message (Best Effort)
-    tg_success = False
-    fail_reason = ""
-    if msg_obj.message_id:
-        try:
-            await context.bot.edit_message_text(chat_id=chat.id, message_id=msg_obj.message_id, text=new_content)
-            tg_success = True
-        except Exception as e:
-            # Expected errors: Message can't be edited (User msg), Message not modified, etc.
-            fail_reason = str(e)
-            if "Message is not modified" in str(e):
-                tg_success = True # Treat as success if content is same
-            
-    if tg_success:
-        await update.message.reply_text(f"✅ <b>完美同步</b>: 记忆与消息均已修正。", parse_mode='HTML')
-    else:
-        # Check if it was a user message (which we can't edit)
-        is_user_msg = (msg_obj.role == "user")
-        explanation = "(无法修改用户消息)" if is_user_msg else f"(API Error: {fail_reason})"
-        await update.message.reply_text(f"✅ <b>记忆已修正</b> {explanation}\n⚠️ 物理消息未变。", parse_mode='HTML')
 
 @require_admin_access
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -506,38 +516,28 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 场景 1: 回复引用 (优先处理)
     if update.message.reply_to_message:
         target_ids.add(update.message.reply_to_message.message_id)
-        
-        # 如果同时带了参数，也一并处理
-        # e.g. reply + "/del 123 124" -> delete reply AND 123 AND 124
 
-    # 场景 2: 参数解析 (支持 100-105, 107 108, 109,110 混合写法)
+    # 场景 2: 参数解析
     if context.args:
-        # 将所有参数视为一个长字符串，统一替换分隔符为逗号
         raw_args = " ".join(context.args)
-        # 把 / 和 空格 都替换为 , (保留逗号兼容性，移除斜杠支持以免歧义)
-        normalized = raw_args.replace(" ", ",") # Just convert space to comma for splitting
-        
+        normalized = raw_args.replace(" ", ",") 
         parts = [p.strip() for p in normalized.split(",") if p.strip()]
         
         for part in parts:
-            # Range: 100-105
             if "-" in part:
                 try:
                     start_s, end_s = part.split("-", 1)
                     start, end = int(start_s), int(end_s)
-                    if start > end: start, end = end, start # Swap if reversed
-                    # 限制一次删除数量以防误操作 (e.g. 1-10000)
+                    if start > end: start, end = end, start
                     if (end - start) > 100:
                         await update.message.reply_text(f"⚠️ 范围过大 ({part})，单次限制 100 条。已跳过。")
                         continue
                     for i in range(start, end + 1):
                         target_ids.add(i)
                 except ValueError:
-                    continue # Ignore format error
-            # Single: 100
+                    continue
             else:
                 try:
-                    # 移除可能误入的 slash (虽然已经不作为分隔符处理)
                     clean_part = part.replace("/", "")
                     if not clean_part: continue
                     target_ids.add(int(clean_part))
@@ -548,74 +548,176 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ 用法: `/del <ID> [ID] [Start-End]` (空格分隔)", parse_mode='Markdown')
         return
 
-    # 执行删除
-    # 从集合转为排序列表，方便阅读日志
+    # Preview Logic
     sorted_ids = sorted(list(target_ids))
-    success_db_count = 0
-    success_tg_count = 0
-    fail_count = 0
+    preview_lines = []
+    valid_targets = [] # List of {"db_id": int, "msg_id": int}
     
     for tid in sorted_ids:
-        # Step 1: Resolve to Message Object (Try as DB ID, then as TG Message ID)
+        # Resolve ID
         msg_obj = await history_service.get_message_by_db_id(tid, chat_id=chat.id)
-        
-        # 如果不是 DB ID，尝试作为 TG MSG ID
         if not msg_obj:
             msg_obj = await history_service.get_message(chat.id, tid)
-
-        # Step 2: Delete from Telegram (Physical Delete)
-        # 只要找到了 Message ID，就尝试物理删除
-        # (即使用户输入的是 DB ID，我们也能通过 msg_obj.message_id 找到对应的 TG ID)
-        tg_delete_ok = False
-        if msg_obj and msg_obj.message_id:
-             try:
-                 await context.bot.delete_message(chat_id=chat.id, message_id=msg_obj.message_id)
-                 tg_delete_ok = True
-                 success_tg_count += 1
-             except Exception as e:
-                 # 常见错误: Message to delete not found, Message can't be deleted (too old/no permission)
-                 logger.warning(f"Failed to delete TG message {msg_obj.message_id}: {e}")
-        elif not msg_obj and tid > 0:
-            # 即使 DB 里没有，也尝试盲删 TG ID (用户可能就是想删 TG 消息)
-            # 但前提是我们确定它极有可能是个 TG ID (tid)
-             try:
-                 await context.bot.delete_message(chat_id=chat.id, message_id=tid)
-                 tg_delete_ok = True
-                 success_tg_count += 1
-             except Exception:
-                 pass
         
-        # Step 3: Delete from DB (Memory Delete)
-        db_delete_ok = False
         if msg_obj:
-             # 有对象，用 DB ID 删最稳
-             if await history_service.delete_message_by_db_id(msg_obj.id, chat_id=chat.id):
-                 db_delete_ok = True
-                 success_db_count += 1
+            import html
+            content_snippet = html.escape(msg_obj.content[:50].replace("\n", " "))
+            preview_lines.append(f"• <code>{msg_obj.id}|{msg_obj.message_id}</code> [{msg_obj.role}]: {content_snippet}")
+            valid_targets.append({"db_id": msg_obj.id, "msg_id": msg_obj.message_id})
         else:
-             # 无对象，尝试作为 DB IDBlind Delete
-             if await history_service.delete_message_by_db_id(tid, chat_id=chat.id):
-                 db_delete_ok = True
-                 success_db_count += 1
-             # 再尝试 Msg ID Blind Delete
-             elif await history_service.delete_message(chat.id, tid):
-                 db_delete_ok = True
-                 success_db_count += 1
+            # Blind ID (Try as TG ID)
+            preview_lines.append(f"• <code>{tid}</code> [Unknown]: (Blind Delete)")
+            valid_targets.append({"db_id": tid, "msg_id": tid}) # Fallback logic in execution
+
+    if not valid_targets:
+        await update.message.reply_text("⚠️ 未找到任何匹配的消息记录 (所有 ID 均无效)。")
+        return
+
+    # Truncate preview if too long
+    if len(preview_lines) > 10:
+        preview_text = "\n".join(preview_lines[:10]) + f"\n... (and {len(preview_lines)-10} more)"
+    else:
+        preview_text = "\n".join(preview_lines)
+
+    confirm_id = str(uuid.uuid4())[:8]
+    PENDING_CONFIRMATIONS[confirm_id] = {
+        "type": "delete",
+        "chat_id": chat.id,
+        "user_id": user.id,
+        "targets": valid_targets,
+        "timestamp": 0
+    }
+
+    text = (
+        f"🗑️ <b>确认删除以下 {len(valid_targets)} 条消息？</b>\n\n"
+        f"{preview_text}\n\n"
+        f"⚠️ 操作将物理删除数据库记录与群消息。"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ 确认删除", callback_data=f"admin:confirm:{confirm_id}"),
+            InlineKeyboardButton("❌ 取消", callback_data=f"admin:cancel:{confirm_id}")
+        ]
+    ]
+
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
+
+async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    处理 /del 和 /edit 的确认回调
+    Data: admin:confirm:<uuid> or admin:cancel:<uuid>
+    """
+    query = update.callback_query
+    user = update.effective_user
+    
+    # Check data pattern
+    data = query.data
+    if not data.startswith("admin:"):
+        return
+
+    parts = data.split(":")
+    action = parts[1] # confirm, cancel
+    confirm_id = parts[2]
+    
+    # Retrieve State
+    state = PENDING_CONFIRMATIONS.get(confirm_id)
+    if not state:
+        await query.answer("⚠️ 操作已过期或不存在", show_alert=True)
+        await query.edit_message_text("❌ 操作已过期")
+        return
+
+    # Verify User
+    if state["user_id"] != user.id:
+        await query.answer("❌ 只能由指令发起人操作", show_alert=True)
+        return
+
+    # cleanup state immediately (prevent double click)
+    del PENDING_CONFIRMATIONS[confirm_id]
+
+    if action == "cancel":
+        await query.answer("已取消")
+        await query.edit_message_text(f"❌ 操作已取消 (By {user.first_name})")
+        return
+
+    await query.answer("处理中...")
+    
+    # Execute Action
+    if state["type"] == "delete":
+        targets = state["targets"]
+        success_db = 0
+        success_tg = 0
+        fail_count = 0
         
-        if not db_delete_ok and not tg_delete_ok:
-            fail_count += 1
+        chat_id = state["chat_id"]
+        
+        for t in targets:
+            db_id = t["db_id"]
+            msg_id = t["msg_id"] # Can be same as db_id if blind
+            
+            # 1. TG Delete
+            tg_ok = False
+            if msg_id:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+                    success_tg += 1
+                    tg_ok = True
+                except Exception:
+                    pass
+            
+            # 2. DB Delete
+            db_ok = False
+            # Try by DB ID first
+            if await history_service.delete_message_by_db_id(db_id, chat_id=chat_id):
+                success_db += 1
+                db_ok = True
+            # Fallback by Msg ID
+            elif msg_id and await history_service.delete_message(chat_id, msg_id):
+                success_db += 1
+                db_ok = True
+            
+            if not tg_ok and not db_ok:
+                fail_count += 1
+        
+        report = (
+            f"🗑️ <b>删除完成</b>\n"
+            f"🧠 记忆清除: {success_db} 条\n"
+            f"💥 物理粉碎: {success_tg} 条"
+        )
+        if fail_count > 0:
+            report += f"\n⚠️ 失败: {fail_count} 条"
+            
+        await query.edit_message_text(report, parse_mode='HTML')
 
-    msg = f"🗑️ <b>删除报告</b>\n"
-    msg += f"🧠 记忆清除: {success_db_count} 条\n"
-    msg += f"💥 物理粉碎: {success_tg_count} 条\n"
-    
-    if fail_count > 0:
-        msg += f"⚠️ 未找到/失败: {fail_count} 条\n"
-    
-    # 如果全失败
-    if success_db_count == 0 and success_tg_count == 0 and fail_count > 0:
-        msg += "\n(未在数据库或群组中找到指定 ID)"
+    elif state["type"] == "edit":
+        chat_id = state["chat_id"]
+        db_id = state["target_db_id"]
+        msg_id = state["target_msg_id"]
+        new_content = state["new_content"]
+        
+        # 1. DB Update
+        db_ok = await history_service.update_message_content_by_db_id(db_id, new_content, chat_id=chat_id)
+        
+        if not db_ok:
+            await query.edit_message_text("❌ 数据库更新失败 (可能已被删除)")
+            return
 
-    await update.message.reply_text(msg, parse_mode='HTML')
+        # 2. TG Update
+        tg_ok = False
+        fail_reason = ""
+        if msg_id:
+            try:
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text=new_content)
+                tg_ok = True
+            except Exception as e:
+                fail_reason = str(e)
+                if "Message is not modified" in str(e):
+                    tg_ok = True
+        
+        if tg_ok:
+            await query.edit_message_text(f"✅ <b>完美同步</b>: 记忆与消息均已修正。", parse_mode='HTML')
+        else:
+            await query.edit_message_text(f"✅ <b>记忆已修正</b> (物理消息未变: {fail_reason})", parse_mode='HTML')
 
 

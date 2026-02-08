@@ -88,8 +88,12 @@ def run_bot():
         reset_command, stats_command, prompt_command, 
         debug_command, add_whitelist_command, remove_whitelist_command,
         sub_command, push_now_command,
-        edit_command, delete_command # New
+        edit_command, delete_command, admin_action_callback # New
     )
+    # 注册 Admin Callback (必须在 Chat Engine 之前)
+    from telegram.ext import CallbackQueryHandler
+    application.add_handler(CallbackQueryHandler(admin_action_callback, pattern="^admin:"))
+
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("prompt", prompt_command))
