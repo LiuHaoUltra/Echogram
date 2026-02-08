@@ -150,6 +150,55 @@ class HistoryService:
                 .order_by(History.timestamp.desc())\
                 .limit(1)
             result = await session.execute(stmt)
-            return result.scalar_one_or_none()
+            return result.scalar_one_or_none()    
+
+    async def update_message_content(self, chat_id: int, message_id: int, new_content: str):
+        """
+        根据 TG Message ID 更新消息内容
+        """
+        async for session in get_db_session():
+            stmt = update(History).where(History.chat_id == chat_id, History.message_id == message_id).values(content=new_content)
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount > 0
+
+    async def update_message_content_by_db_id(self, db_id: int, new_content: str, chat_id: int = None):
+        """
+        根据 DB Primary Key 更新消息内容
+        可选校验 chat_id 以确保安全性
+        """
+        async for session in get_db_session():
+            if chat_id:
+                stmt = update(History).where(History.id == db_id, History.chat_id == chat_id).values(content=new_content)
+            else:
+                stmt = update(History).where(History.id == db_id).values(content=new_content)
+            
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount > 0
+
+    async def delete_message(self, chat_id: int, message_id: int):
+        """
+        根据 TG Message ID 删除消息
+        """
+        async for session in get_db_session():
+            stmt = delete(History).where(History.chat_id == chat_id, History.message_id == message_id)
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount > 0
+
+    async def delete_message_by_db_id(self, db_id: int, chat_id: int = None):
+        """
+        根据 DB Primary Key 删除消息
+        """
+        async for session in get_db_session():
+            if chat_id:
+                stmt = delete(History).where(History.id == db_id, History.chat_id == chat_id)
+            else:
+                stmt = delete(History).where(History.id == db_id)
+
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount > 0
 
 history_service = HistoryService()

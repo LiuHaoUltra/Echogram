@@ -87,7 +87,8 @@ def run_bot():
     from core.admin_handlers import (
         reset_command, stats_command, prompt_command, 
         debug_command, add_whitelist_command, remove_whitelist_command,
-        sub_command, push_now_command
+        sub_command, push_now_command,
+        edit_command, delete_command # New
     )
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("stats", stats_command))
@@ -96,16 +97,19 @@ def run_bot():
     application.add_handler(CommandHandler("add_whitelist", add_whitelist_command))
     application.add_handler(CommandHandler("remove_whitelist", remove_whitelist_command))
     application.add_handler(CommandHandler("sub", sub_command))
-    application.add_handler(CommandHandler("sub", sub_command))
     application.add_handler(CommandHandler("push_now", push_now_command))
+    
+    application.add_handler(CommandHandler("edit", edit_command))
+    application.add_handler(CommandHandler(["del", "delete"], delete_command))
     
     # 聊天引擎处理器 (低优先级)
     from telegram.ext import MessageHandler, filters
-    from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry
+    from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry, process_message_edit
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
     application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
     application.add_handler(MessageHandler(filters.PHOTO, process_photo_entry))  # 图片消息处理
+    application.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, process_message_edit)) # 原生编辑监听
     
     # 回应处理器
     from telegram.ext import MessageReactionHandler

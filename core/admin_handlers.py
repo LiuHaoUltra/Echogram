@@ -1,10 +1,10 @@
-import os
 from telegram import Update, constants
 from telegram.ext import ContextTypes
 from core.history_service import history_service
-from core.secure import is_admin
+from core.secure import is_admin, require_admin_access
 from utils.logger import logger
 
+@require_admin_access
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /reset 指令：清空当前对话的历史记忆
@@ -12,9 +12,8 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
-    # 鉴权：非管理员完全静默
-    if not is_admin(user.id):
-        return
+    # 鉴权移至装饰器
+    # if not is_admin(user.id): return
 
     # 管理员在私聊中使用：提供友好提示
     if chat.type == constants.ChatType.PRIVATE:
@@ -36,6 +35,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("🧹 记忆已重置！上下文和长期摘要均已清空。")
 
+@require_admin_access
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /stats 指令：查看当前会话的记忆状态
@@ -43,8 +43,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
-    if not is_admin(user.id):
-        return
+    # 鉴权移至装饰器
+    
     if chat.type == constants.ChatType.PRIVATE:
         await update.message.reply_text("📊 请在群组中使用此指令查看统计信息。")
         return
@@ -53,6 +53,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from core.config_service import config_service
     from config.settings import settings
     
+    # ... (Rest of logic unchanged) ...
     # 获取动态配置
     configs = await config_service.get_all_settings()
     T = int(configs.get("history_tokens", settings.HISTORY_WINDOW_TOKENS))
@@ -141,6 +142,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(msg, parse_mode='HTML')
 
+@require_admin_access
 async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /prompt 指令：在群组触发，将完整的 System Prompt 发送到管理员私聊
@@ -148,8 +150,8 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
 
-    if not is_admin(user.id):
-        return
+    # 鉴权移至装饰器
+    
     if chat.type == constants.ChatType.PRIVATE:
         await update.message.reply_text("💡 请在群组中使用此指令，以预览针对该群组生成的提示词。")
         return
@@ -277,14 +279,15 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Failed to send prompt preview: {e}", exc_info=True)
         await update.message.reply_text(f"❌ 预览发送失败。请检查机器人是否已在私聊中启动。")
 
+@require_admin_access
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /debug 指令：在私聊中发送最新的系统日志
     """
     user = update.effective_user
-    if not is_admin(user.id):
-        return
-
+    # 鉴权移至装饰器
+    
+    import os
     log_path = os.path.join("logs", "echogram.log")
     if not os.path.exists(log_path):
         await update.message.reply_text("❌ 未找到日志文件。")
@@ -311,6 +314,8 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Failed to send debug logs: {e}")
         await update.message.reply_text("❌ 读取日志失败。")
 
+# 注意: add_whitelist 需要在非白名单群组执行，故仅需 Admin 校验，不能用 verify_whitelisted 装饰器
+# 因此不加装饰器，保持手动检查
 async def add_whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /add_whitelist 指令：将当前群组加入白名单
@@ -332,6 +337,7 @@ async def add_whitelist_command(update: Update, context: ContextTypes.DEFAULT_TY
     
     await update.message.reply_text(f"✅ 已将本会话 <code>{description}</code> (<code>{chat.id}</code>) 加入白名单。", parse_mode='HTML')
 
+@require_admin_access
 async def remove_whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /remove_whitelist 指令：将当前群组移出白名单
@@ -339,8 +345,8 @@ async def remove_whitelist_command(update: Update, context: ContextTypes.DEFAULT
     user = update.effective_user
     chat = update.effective_chat
     
-    if not is_admin(user.id):
-        return
+    # 鉴权移至装饰器
+    
     if chat.type == constants.ChatType.PRIVATE:
         await update.message.reply_text("⚠️ 此指令仅限在群组中使用。")
         return
@@ -350,6 +356,7 @@ async def remove_whitelist_command(update: Update, context: ContextTypes.DEFAULT
     
     await update.message.reply_text(f"🗑️ 已将本会话 (<code>{chat.id}</code>) 从白名单中移除。", parse_mode='HTML')
 
+@require_admin_access
 async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /sub 指令：快速添加订阅并绑定到当前群组
@@ -358,8 +365,8 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
-    if not is_admin(user.id):
-        return
+    # 鉴权移至装饰器
+    
     if chat.type == constants.ChatType.PRIVATE:
         await update.message.reply_text("⚠️ 请在群组中使用，以便自动绑定目标群组。私聊请使用 Dashboard。")
         return
@@ -375,11 +382,9 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     route = context.args[0]
     name = " ".join(context.args[1:])
 
-    # Check whitelist first
-    from core.access_service import access_service
-    if not await access_service.is_chat_whitelisted(chat.id):
-        await update.message.reply_text("⚠️ 当前群组未在白名单中。请先发送 /add_whitelist 添加。", parse_mode='HTML')
-        return
+    # Check whitelist first (Duplicates decorator but keeps explicit specific message)
+    # Decorator handles secure bail out, manual check here can be removed or kept for "double safety"
+    # Actually, decorator handles whitelisting, so we are safe.
 
     # Add & Bind
     from core.news_push_service import news_push_service
@@ -398,12 +403,15 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Sub command failed: {e}")
         await update.message.reply_text(f"❌ 系统错误: {e}")
 
+@require_admin_access
 async def push_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /push_now 指令：强制触发一次新闻推送检查 (忽略时间/闲置限制)
     """
     user = update.effective_user
-    if not is_admin(user.id): return
+    chat = update.effective_chat # Needed for implicit check in wrapper
+    
+    # 鉴权移至装饰器
 
     await update.message.reply_text("🚀 正在强制执行 NewsPush 检查...\n(忽略 Active Hours 与 Idle Check)")
     from core.news_push_service import news_push_service
@@ -414,8 +422,137 @@ async def push_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ 检查循环执行完毕。请观察群组消息。")
     except Exception as e:
         logger.error(f"Push Now Failed: {e}")
-    except Exception as e:
-        logger.error(f"Push Now Failed: {e}")
         await update.message.reply_text(f"❌ 执行出错: {e}")
+
+@require_admin_access
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /edit 指令：修改历史消息
+    用法: /edit <ID> <NewContent>
+    ID 优先尝试 DB ID，其次 Message ID
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    # 鉴权移至装饰器
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text("❌ 用法: `/edit <ID> <新内容>`", parse_mode='Markdown')
+        return
+
+    target_id_str = context.args[0]
+    new_content = " ".join(context.args[1:])
+    
+    try:
+        target_id = int(target_id_str)
+    except ValueError:
+        await update.message.reply_text("❌ ID 必须是数字")
+        return
+
+    # 优先尝试作为 DB ID (Global ID)
+    success = await history_service.update_message_content_by_db_id(target_id, new_content, chat_id=chat.id)
+    
+    if not success:
+        # 失败则尝试作为 TG Message ID
+        success = await history_service.update_message_content(chat.id, target_id, new_content)
+        
+    if success:
+        await update.message.reply_text(f"✅ 消息 `{target_id}` 内容已更新。", parse_mode='Markdown')
+    else:
+        await update.message.reply_text(f"❌ 未找到 ID 为 `{target_id}` 的消息 (在此会话中)。", parse_mode='Markdown')
+
+@require_admin_access
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /del 指令：删除历史消息
+    用法: 
+    - /del <ID> (单个)
+    - /del <ID> <ID> ... (空格分隔)
+    - /del <ID> ... <Start>-<End> ... (混合范围)
+    - 回复某条消息并发送 /del
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    # 鉴权移至装饰器
+
+    target_ids = set()
+    
+    # 场景 1: 回复引用 (优先处理)
+    if update.message.reply_to_message:
+        target_ids.add(update.message.reply_to_message.message_id)
+        
+        # 如果同时带了参数，也一并处理
+        # e.g. reply + "/del 123 124" -> delete reply AND 123 AND 124
+
+    # 场景 2: 参数解析 (支持 100-105, 107 108, 109,110 混合写法)
+    if context.args:
+        # 将所有参数视为一个长字符串，统一替换分隔符为逗号
+        raw_args = " ".join(context.args)
+        # 把 / 和 空格 都替换为 , (保留逗号兼容性，移除斜杠支持以免歧义)
+        normalized = raw_args.replace(" ", ",") # Just convert space to comma for splitting
+        
+        parts = [p.strip() for p in normalized.split(",") if p.strip()]
+        
+        for part in parts:
+            # Range: 100-105
+            if "-" in part:
+                try:
+                    start_s, end_s = part.split("-", 1)
+                    start, end = int(start_s), int(end_s)
+                    if start > end: start, end = end, start # Swap if reversed
+                    # 限制一次删除数量以防误操作 (e.g. 1-10000)
+                    if (end - start) > 100:
+                        await update.message.reply_text(f"⚠️ 范围过大 ({part})，单次限制 100 条。已跳过。")
+                        continue
+                    for i in range(start, end + 1):
+                        target_ids.add(i)
+                except ValueError:
+                    continue # Ignore format error
+            # Single: 100
+            else:
+                try:
+                    # 移除可能误入的 slash (虽然已经不作为分隔符处理)
+                    clean_part = part.replace("/", "")
+                    if not clean_part: continue
+                    target_ids.add(int(clean_part))
+                except ValueError:
+                    continue
+
+    if not target_ids:
+        await update.message.reply_text("❌ 用法: `/del <ID> [ID] [Start-End]` (空格分隔)", parse_mode='Markdown')
+        return
+
+    # 执行删除
+    # 从集合转为排序列表，方便阅读日志
+    sorted_ids = sorted(list(target_ids))
+    success_count = 0
+    fail_count = 0
+    
+    # 因为可能混合了 DB ID 和 Message ID，我们采取宽容策略：
+    # 对每个 ID，先试 DB删除，再试 TG删除
+    for tid in sorted_ids:
+        # Try DB ID first
+        if await history_service.delete_message_by_db_id(tid, chat_id=chat.id):
+            success_count += 1
+            continue
+        
+        # Try Message ID
+        if await history_service.delete_message(chat.id, tid):
+            success_count += 1
+            continue
+            
+        fail_count += 1
+
+    msg = f"🗑️ <b>删除报告</b>\n"
+    msg += f"✅ 成功: {success_count} 条\n"
+    if fail_count > 0:
+        msg += f"⚠️ 未找到: {fail_count} 条\n"
+    
+    # 如果全失败
+    if success_count == 0 and fail_count > 0:
+        msg += "\n(请检查 ID 是 DB ID 还是 TG Message ID)"
+
+    await update.message.reply_text(msg, parse_mode='HTML')
 
 

@@ -485,7 +485,28 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
         # Should not happen if tail_msgs is empty, but just in case
         pass
 
-    # 7. 调用 LLM
+    # 7. 预先持久化 Shift-Left 媒体数据 (Critical Fix)
+    # 将识别结果写入数据库，确保即使主模型 API 失败，转录内容也不丢失
+    try:
+        # 使用副本迭代以防运行时修改
+        for mid, (mtype, content) in list(processed_media_cache.items()):
+            if mtype == 'image':
+                 msg_obj, _ = pending_images_map.get(mid, (None,None))
+                 if msg_obj:
+                    # Persist: [Image Summary: caption]
+                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[Image Summary: {content}]")
+                    logger.info(f"Persisted Image Caption for Msg {mid}")
+                    
+            elif mtype == 'voice':
+                 msg_obj, _ = pending_voices_map.get(mid, (None,None))
+                 if msg_obj:
+                     # Persist: Raw Transcript
+                    await history_service.update_message_content_by_file_id(msg_obj.file_id, content)
+                    logger.info(f"Persisted Voice Transcript for Msg {mid}")
+    except Exception as e:
+        logger.error(f"Failed to persist media data before LLM call: {e}")
+
+    # 8. 调用 LLM
     current_temp = safe_float_config(configs.get("temperature", "0.7"), 0.7, 0.0, 2.0)
     
     try:
@@ -499,52 +520,29 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
             modalities=["text"] 
         )
         
-        if not response.choices or not response.choices[0].message.content:
-            await context.bot.send_message(chat_id, "⚠️ AI 返回空内容")
+        # 增强的空内容检查与诊断
+        if not response.choices:
+            logger.error("LLM Error: No choices returned.")
+            await context.bot.send_message(chat_id, "⚠️ AI 未返回任何选项")
+            return
+
+        choice = response.choices[0]
+        reply_content = choice.message.content
+        finish_reason = choice.finish_reason
+
+        if not reply_content:
+            logger.warning(f"LLM Empty Response. Finish Reason: {finish_reason}")
+            # 如果是 content_filter，明确告知用户
+            if finish_reason == 'content_filter':
+                await context.bot.send_message(chat_id, "⚠️ AI 内容被安全过滤器拦截")
+            else:
+                await context.bot.send_message(chat_id, f"⚠️ AI 返回空内容 (Reason: {finish_reason})")
             return
             
-        reply_content = response.choices[0].message.content.strip()
+        reply_content = reply_content.strip()
         logger.info(f"LLM Response: {reply_content[:100]}...")
         
-        # 8. 解析结果并回填 (Backfill)
-        # 此时 DB 中的 content 已经是 [图片内容: xxx] 或 [语音转录: xxx]
-        # 但我们可能想把 LLM 生成的更详细的 Summary/Transcript 覆盖进去？
-        # 或者，Shift-Left 产生的就是 Truth，不需要 LLM 再回填了？
-        # 既然我们已经用 Shift-Left 产生了 Caption/Transcript，LLM 的输出应该主要针对 User Query
-        # 所以这里的 回填逻辑 可以简化/移除，或者只作为补充？
-        
-        # 现有的 Shift-Left 已经在 RAG 之前更新了内存中的 msg.content
-        # 并在 DB 中（如果需要持久化）应该在 Shift-Left 阶段就 Update DB
-        
-        # 我们在 Shift-Left 阶段只是修改了 msg 对象属性，并没有 history_service.update_message_content...
-        # 应该在 Shift-Left loop 里持久化。
-        
-        # 补救：在 Shift-Left 循环里添加 await history_service.update_message_content_by_file_id(...)
-        # 否则下一次加载又是 Processing...
-        
-        # 由于 Shift-Left 已经在上面处理了持久化 (Wait, I need to add that to the first chunk!)
-        # Re-visiting the first chunk: I didn't add DB update there.
-        
-        # Let's add DB persistent updates here for processed items
-        for mid, (mtype, content) in processed_media_cache.items():
-            if mtype == 'image':
-                 msg_obj, _ = pending_images_map.get(mid, (None,None))
-                 if msg_obj:
-                    # Persist Legacy Format: [Image Summary: caption]
-                    await history_service.update_message_content_by_file_id(msg_obj.file_id, f"[Image Summary: {content}]")
-                    
-            elif mtype == 'voice':
-                 # content is transcript
-                 msg_obj, _ = pending_voices_map.get(mid, (None,None))
-                 if msg_obj:
-                     # Persist Legacy Format: Raw Text
-                    await history_service.update_message_content_by_file_id(msg_obj.file_id, content)
-
-        # 8.2 原有的 XML 回填逻辑 (Optional Compatibility)
-        # 如果 LLM 依然返回了 <transcript> (可能因为 Prompt 没改?)
-        # 暂时保留以防万一，但主要依赖 Shift-Left
-        
-        # ... (Legacy XML parsing removed for cleanliness, ensuring Shift-Left is the source of truth)
+        # (原回填逻辑已移除，由上方预持久化接管)
             
         if not reply_content:
             reply_content = "<chat>...</chat>" # 兜底
@@ -634,5 +632,29 @@ async def process_reaction_update(update: Update, context: ContextTypes.DEFAULT_
         role="system",
         content=content
     )
+
+
+async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    处理已编辑的消息 (EDITED_MESSAGE)
+    同步更新数据库中的内容
+    """
+    msg = update.edited_message
+    if not msg: return
+    
+    chat = msg.chat
+    
+    # 简单的权限检查 (Optional, update logic is safe)
+    if chat.type != constants.ChatType.PRIVATE:
+        if not await access_service.is_whitelisted(chat.id):
+            return
+
+    new_text = msg.text or msg.caption or "[Media Content Updated]"
+    
+    success = await history_service.update_message_content(chat.id, msg.message_id, new_text)
+    if success:
+        logger.info(f"EDITED [{chat.id}]: Msg {msg.message_id} updated in DB.")
+    else:
+        logger.warning(f"EDITED [{chat.id}]: Msg {msg.message_id} not found in DB (too old?).")
 
 lazy_sender.set_callback(generate_response)
