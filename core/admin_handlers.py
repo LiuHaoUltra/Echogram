@@ -17,7 +17,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # if not is_admin(user.id): return
 
     # 管理员在私聊中使用：提供友好提示
-    if chat.type == constants.ChatType.PRIVATE:
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("💡 请在群组中使用此指令，以重置该群组的会话。")
         return
 
@@ -46,7 +46,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 鉴权移至装饰器
     
-    if chat.type == constants.ChatType.PRIVATE:
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("📊 请在群组中使用此指令查看统计信息。")
         return
 
@@ -153,7 +153,7 @@ async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 鉴权移至装饰器
     
-    if chat.type == constants.ChatType.PRIVATE:
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("💡 请在群组中使用此指令，以预览针对该群组生成的提示词。")
         return
 
@@ -324,9 +324,14 @@ async def add_whitelist_command(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.effective_user
     chat = update.effective_chat
     
+    # 鉴权移至装饰器 (Wait, this one does NOT have decorator in original code, but has manual checks. AND the commented out code says it keeps manual check)
+    # Actually, in viewed file, line 318 says "注意: add_whitelist 需要在非白名单群组执行... 因此不加装饰器"
+    # But wait, lines 360+ in original file show sub_command has decorator.
+    # Lines 320 in original file show add_whitelist_command.
+    
     if not is_admin(user.id):
         return
-    if chat.type == constants.ChatType.PRIVATE:
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("⚠️ 此指令仅限在群组中使用。")
         return
 
@@ -348,7 +353,7 @@ async def remove_whitelist_command(update: Update, context: ContextTypes.DEFAULT
     
     # 鉴权移至装饰器
     
-    if chat.type == constants.ChatType.PRIVATE:
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("⚠️ 此指令仅限在群组中使用。")
         return
 
@@ -368,7 +373,7 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 鉴权移至装饰器
     
-    if chat.type == constants.ChatType.PRIVATE:
+    if chat.type == ChatType.PRIVATE:
         await update.message.reply_text("⚠️ 请在群组中使用，以便自动绑定目标群组。私聊请使用 Dashboard。")
         return
 
