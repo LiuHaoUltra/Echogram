@@ -449,17 +449,42 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ID 必须是数字")
         return
 
-    # 优先尝试作为 DB ID (Global ID)
-    success = await history_service.update_message_content_by_db_id(target_id, new_content, chat_id=chat.id)
-    
-    if not success:
-        # 失败则尝试作为 TG Message ID
-        success = await history_service.update_message_content(chat.id, target_id, new_content)
-        
-    if success:
-        await update.message.reply_text(f"✅ 消息 `{target_id}` 内容已更新。", parse_mode='Markdown')
-    else:
+    # 优先尝试作为 DB ID (Global ID) 获取对象
+    msg_obj = await history_service.get_message_by_db_id(target_id, chat_id=chat.id)
+    if not msg_obj:
+        msg_obj = await history_service.get_message(chat.id, target_id)
+
+    if not msg_obj:
         await update.message.reply_text(f"❌ 未找到 ID 为 `{target_id}` 的消息 (在此会话中)。", parse_mode='Markdown')
+        return
+
+    # 1. Update DB
+    db_success = await history_service.update_message_content_by_db_id(msg_obj.id, new_content, chat_id=chat.id)
+    
+    if not db_success:
+        await update.message.reply_text(f"❌ 数据库更新失败 (ID: {target_id})。", parse_mode='Markdown')
+        return
+
+    # 2. Try Update TG Message (Best Effort)
+    tg_success = False
+    fail_reason = ""
+    if msg_obj.message_id:
+        try:
+            await context.bot.edit_message_text(chat_id=chat.id, message_id=msg_obj.message_id, text=new_content)
+            tg_success = True
+        except Exception as e:
+            # Expected errors: Message can't be edited (User msg), Message not modified, etc.
+            fail_reason = str(e)
+            if "Message is not modified" in str(e):
+                tg_success = True # Treat as success if content is same
+            
+    if tg_success:
+        await update.message.reply_text(f"✅ <b>完美同步</b>: 记忆与消息均已修正。", parse_mode='HTML')
+    else:
+        # Check if it was a user message (which we can't edit)
+        is_user_msg = (msg_obj.role == "user")
+        explanation = "(无法修改用户消息)" if is_user_msg else f"(API Error: {fail_reason})"
+        await update.message.reply_text(f"✅ <b>记忆已修正</b> {explanation}\n⚠️ 物理消息未变。", parse_mode='HTML')
 
 @require_admin_access
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -526,32 +551,70 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 执行删除
     # 从集合转为排序列表，方便阅读日志
     sorted_ids = sorted(list(target_ids))
-    success_count = 0
+    success_db_count = 0
+    success_tg_count = 0
     fail_count = 0
     
-    # 因为可能混合了 DB ID 和 Message ID，我们采取宽容策略：
-    # 对每个 ID，先试 DB删除，再试 TG删除
     for tid in sorted_ids:
-        # Try DB ID first
-        if await history_service.delete_message_by_db_id(tid, chat_id=chat.id):
-            success_count += 1
-            continue
+        # Step 1: Resolve to Message Object (Try as DB ID, then as TG Message ID)
+        msg_obj = await history_service.get_message_by_db_id(tid, chat_id=chat.id)
         
-        # Try Message ID
-        if await history_service.delete_message(chat.id, tid):
-            success_count += 1
-            continue
-            
-        fail_count += 1
+        # 如果不是 DB ID，尝试作为 TG MSG ID
+        if not msg_obj:
+            msg_obj = await history_service.get_message(chat.id, tid)
+
+        # Step 2: Delete from Telegram (Physical Delete)
+        # 只要找到了 Message ID，就尝试物理删除
+        # (即使用户输入的是 DB ID，我们也能通过 msg_obj.message_id 找到对应的 TG ID)
+        tg_delete_ok = False
+        if msg_obj and msg_obj.message_id:
+             try:
+                 await context.bot.delete_message(chat_id=chat.id, message_id=msg_obj.message_id)
+                 tg_delete_ok = True
+                 success_tg_count += 1
+             except Exception as e:
+                 # 常见错误: Message to delete not found, Message can't be deleted (too old/no permission)
+                 logger.warning(f"Failed to delete TG message {msg_obj.message_id}: {e}")
+        elif not msg_obj and tid > 0:
+            # 即使 DB 里没有，也尝试盲删 TG ID (用户可能就是想删 TG 消息)
+            # 但前提是我们确定它极有可能是个 TG ID (tid)
+             try:
+                 await context.bot.delete_message(chat_id=chat.id, message_id=tid)
+                 tg_delete_ok = True
+                 success_tg_count += 1
+             except Exception:
+                 pass
+        
+        # Step 3: Delete from DB (Memory Delete)
+        db_delete_ok = False
+        if msg_obj:
+             # 有对象，用 DB ID 删最稳
+             if await history_service.delete_message_by_db_id(msg_obj.id, chat_id=chat.id):
+                 db_delete_ok = True
+                 success_db_count += 1
+        else:
+             # 无对象，尝试作为 DB IDBlind Delete
+             if await history_service.delete_message_by_db_id(tid, chat_id=chat.id):
+                 db_delete_ok = True
+                 success_db_count += 1
+             # 再尝试 Msg ID Blind Delete
+             elif await history_service.delete_message(chat.id, tid):
+                 db_delete_ok = True
+                 success_db_count += 1
+        
+        if not db_delete_ok and not tg_delete_ok:
+            fail_count += 1
 
     msg = f"🗑️ <b>删除报告</b>\n"
-    msg += f"✅ 成功: {success_count} 条\n"
+    msg += f"🧠 记忆清除: {success_db_count} 条\n"
+    msg += f"💥 物理粉碎: {success_tg_count} 条\n"
+    
     if fail_count > 0:
-        msg += f"⚠️ 未找到: {fail_count} 条\n"
+        msg += f"⚠️ 未找到/失败: {fail_count} 条\n"
     
     # 如果全失败
-    if success_count == 0 and fail_count > 0:
-        msg += "\n(请检查 ID 是 DB ID 还是 TG Message ID)"
+    if success_db_count == 0 and success_tg_count == 0 and fail_count > 0:
+        msg += "\n(未在数据库或群组中找到指定 ID)"
 
     await update.message.reply_text(msg, parse_mode='HTML')
 

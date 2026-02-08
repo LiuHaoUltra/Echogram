@@ -41,21 +41,44 @@ class HistoryService:
             await session.execute(delete(History))
             await session.commit()
 
-    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, reply_to_id: int = None, reply_to_content: str = None, message_type: str = "text", file_id: str = None):
-        """添加一条消息记录"""
+    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, message_type: str = "text") -> History:
+        """添加一条新消息到历史记录"""
         async for session in get_db_session():
-            msg = History(
-                chat_id=chat_id, 
-                role=role, 
-                content=content, 
+            if message_id:
+                # 检查是否已存在 (避免重复)
+                stmt = select(History).where(History.chat_id == chat_id, History.message_id == message_id)
+                existing = (await session.execute(stmt)).scalar_one_or_none()
+                if existing:
+                    return existing
+
+            new_msg = History(
+                chat_id=chat_id,
+                role=role,
+                content=content,
                 message_id=message_id,
-                reply_to_id=reply_to_id, 
-                reply_to_content=reply_to_content,
-                message_type=message_type,
-                file_id=file_id
+                message_type=message_type
             )
-            session.add(msg)
+            session.add(new_msg)
             await session.commit()
+            await session.refresh(new_msg)
+            return new_msg
+            
+    async def get_message(self, chat_id: int, message_id: int) -> Optional[History]:
+        """根据 TG Message ID 获取消息对象"""
+        async for session in get_db_session():
+            stmt = select(History).where(History.chat_id == chat_id, History.message_id == message_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    async def get_message_by_db_id(self, db_id: int, chat_id: int = None) -> Optional[History]:
+        """根据 DB Primary Key 获取消息对象"""
+        async for session in get_db_session():
+            if chat_id:
+                stmt = select(History).where(History.id == db_id, History.chat_id == chat_id)
+            else:
+                stmt = select(History).where(History.id == db_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
 
     async def update_message_content_by_file_id(self, file_id: str, new_content: str):
         """根据 File ID 更新消息内容 (用于回填摘要)"""
