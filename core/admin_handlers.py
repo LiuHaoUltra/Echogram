@@ -566,9 +566,8 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             preview_lines.append(f"• <code>{msg_obj.id}|{msg_obj.message_id}</code> [{msg_obj.role}]: {content_snippet}")
             valid_targets.append({"db_id": msg_obj.id, "msg_id": msg_obj.message_id})
         else:
-            # Blind ID (Try as TG ID)
-            preview_lines.append(f"• <code>{tid}</code> [Unknown]: (Blind Delete)")
-            valid_targets.append({"db_id": tid, "msg_id": tid}) # Fallback logic in execution
+            # Blind ID removed: only manage messages present in DB
+            continue
 
     if not valid_targets:
         await update.message.reply_text("⚠️ 未找到任何匹配的消息记录 (所有 ID 均无效)。")
