@@ -40,5 +40,8 @@ data/
 .vscode/
 .idea/
 
-#PRD
+# Client
+client/
+
+# PRD
 Echogram-PRD.md
