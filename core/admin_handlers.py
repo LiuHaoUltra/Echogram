@@ -1,54 +1,9 @@
-from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes, ConversationHandler, ApplicationHandlerStop
-from telegram.constants import ParseMode, ChatType
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ContextTypes
+from telegram.constants import ChatType
 from core.history_service import history_service
 from core.secure import is_admin, require_admin_access
 from utils.logger import logger
-
-
-def _antenna_cfg_key(chat_id: int, suffix: str) -> str:
-    return f"bridge.{chat_id}.{suffix}"
-
-
-async def _get_antenna_group_config(chat_id: int) -> dict:
-    from core.config_service import config_service
-    base_url = await config_service.get_value(_antenna_cfg_key(chat_id, "antenna_api_base_url"), "")
-    ass = await config_service.get_value(_antenna_cfg_key(chat_id, "enable_ass"), "false")
-    avd = await config_service.get_value(_antenna_cfg_key(chat_id, "enable_avd"), "false")
-    return {
-        "base_url": (base_url or "").strip(),
-        "enable_ass": str(ass).strip().lower() in ("1", "true", "yes", "on"),
-        "enable_avd": str(avd).strip().lower() in ("1", "true", "yes", "on"),
-    }
-
-
-def _build_antenna_panel_text(chat_id: int, cfg: dict) -> str:
-    url_disp = cfg["base_url"] if cfg["base_url"] else "(未配置)"
-    ass_state = "✅ ON" if cfg["enable_ass"] else "❌ OFF"
-    avd_state = "✅ ON" if cfg["enable_avd"] else "❌ OFF"
-    return (
-        "🛰️ <b>Antenna 群组面板</b>\n\n"
-        f"🆔 Chat: <code>{chat_id}</code>\n"
-        f"🔗 Base URL: <code>{url_disp}</code>\n"
-        f"• ASS 注入: <code>{ass_state}</code>\n"
-        f"• AVD 检索: <code>{avd_state}</code>\n\n"
-        "说明：仅当前群生效；私聊不可配置。"
-    )
-
-
-def _build_antenna_panel_keyboard(chat_id: int, cfg: dict) -> InlineKeyboardMarkup:
-    ass_btn = "ASS: ON ✅" if cfg["enable_ass"] else "ASS: OFF ❌"
-    avd_btn = "AVD: ON ✅" if cfg["enable_avd"] else "AVD: OFF ❌"
-    keyboard = [
-        [InlineKeyboardButton("🔗 设置 URL", callback_data=f"antenna:set_url:{chat_id}")],
-        [
-            InlineKeyboardButton(ass_btn, callback_data=f"antenna:toggle_ass:{chat_id}"),
-            InlineKeyboardButton(avd_btn, callback_data=f"antenna:toggle_avd:{chat_id}"),
-        ],
-        [InlineKeyboardButton("♻️ 刷新", callback_data=f"antenna:refresh:{chat_id}")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
 @require_admin_access
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -167,18 +122,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.id in CHAT_LOCKS and CHAT_LOCKS[chat.id].locked():
         rag_status_str += " (Locked)"
 
-    # 非对称互通观测
-    # ASS 是会话状态模块，不按 RAG 命中率口径统计
-    bridge_metrics = rag_service.get_bridge_metrics()
-    avd_total = bridge_metrics.get("avd_search_total", 0)
-    avd_hit = bridge_metrics.get("avd_search_hit", 0)
-    avd_rate = f"{(avd_hit / avd_total * 100):.1f}%" if avd_total > 0 else "N/A"
-
-    ass_enabled = str(configs.get("feature_flags.enable_echogram_ass_import_v1", "false")).strip().lower() in ("1", "true", "yes", "on")
-    avd_enabled = str(configs.get("feature_flags.enable_echogram_avd_search_v1", "false")).strip().lower() in ("1", "true", "yes", "on")
-    ass_state = "Enabled" if ass_enabled else "Disabled"
-    avd_state = "Enabled" if avd_enabled else "Disabled"
-
     msg = (
         f"📊 <b>Session Statistics</b>\n\n"
         f"🆔 Chat ID: <code>{chat.id}</code>\n"
@@ -194,30 +137,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• <b>Pending ETL:</b> <code>{rag_pending}</code>\n"
         f"• <b>Active Window:</b> ~{rag_active} msgs (Ignored)\n"
         f"• <b>Status:</b> {rag_status_str}\n\n"
-        f"🔗 <b>Asymmetric Bridge</b>:\n"
-        f"• <b>ASS Module:</b> <code>{ass_state}</code>\n"
-        f"• <b>AVD Module:</b> <code>{avd_state}</code>\n"
-        f"• <b>AVD Hit Rate:</b> <code>{avd_hit}/{avd_total}</code> ({avd_rate})\n\n"
         f" Last Summary: {time_str}"
     )
     
     await update.message.reply_text(msg, parse_mode='HTML')
-
-
-@require_admin_access
-async def antenna_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/antenna：在群组弹出该群专属 Antenna 配置面板"""
-    chat = update.effective_chat
-
-    if chat.type == ChatType.PRIVATE:
-        await update.message.reply_text("⚠️ /antenna 仅支持群组。")
-        return
-
-    cfg = await _get_antenna_group_config(chat.id)
-    text = _build_antenna_panel_text(chat.id, cfg)
-    kb = _build_antenna_panel_keyboard(chat.id, cfg)
-    await update.message.reply_text(text, reply_markup=kb, parse_mode='HTML')
-
 @require_admin_access
 async def prompt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1007,90 +930,5 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(f"✅ <b>听写已修正</b> (附言更新失败: {fail_reason})", parse_mode='HTML')
             else:
                 await query.edit_message_text(f"✅ <b>记忆已修正</b> (物理消息未变: {fail_reason})", parse_mode='HTML')
-
-
-@require_admin_access
-async def antenna_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """处理 /antenna 面板回调与 URL 输入"""
-    query = update.callback_query
-    user = update.effective_user
-    chat = update.effective_chat
-
-    # 文本输入模式：/antenna -> 设置 URL -> 下一条非命令文本
-    if not query and update.message and update.message.text:
-        pending = context.user_data.get("antenna_pending")
-        if not pending:
-            return
-        if chat.type == ChatType.PRIVATE:
-            return
-        if pending.get("chat_id") != chat.id:
-            return
-
-        text = update.message.text.strip()
-        from core.config_service import config_service
-        if not (text.startswith("http://") or text.startswith("https://")):
-            await update.message.reply_text("❌ URL 必须以 http:// 或 https:// 开头。")
-            raise ApplicationHandlerStop
-
-        await config_service.set_value(_antenna_cfg_key(chat.id, "antenna_api_base_url"), text)
-        context.user_data.pop("antenna_pending", None)
-        cfg = await _get_antenna_group_config(chat.id)
-        await update.message.reply_text(
-            _build_antenna_panel_text(chat.id, cfg),
-            reply_markup=_build_antenna_panel_keyboard(chat.id, cfg),
-            parse_mode='HTML'
-        )
-        raise ApplicationHandlerStop
-
-    if not query:
-        return
-    data = query.data or ""
-    if not data.startswith("antenna:"):
-        return
-
-    await query.answer()
-    parts = data.split(":")
-    if len(parts) < 3:
-        return
-
-    action = parts[1]
-    try:
-        target_chat_id = int(parts[2])
-    except Exception:
-        return
-
-    if chat.type == ChatType.PRIVATE or chat.id != target_chat_id:
-        await query.answer("⚠️ 请在目标群组内操作该面板。", show_alert=True)
-        return
-
-    from core.config_service import config_service
-
-    if action == "set_url":
-        context.user_data["antenna_pending"] = {"chat_id": chat.id, "user_id": user.id}
-        await query.edit_message_text(
-            "请输入该群的 Antenna Base URL（http/https）。\n\n示例：<code>https://antenna.example.com</code>",
-            parse_mode='HTML'
-        )
-        return
-
-    if action == "toggle_ass":
-        cfg = await _get_antenna_group_config(chat.id)
-        new_val = "false" if cfg["enable_ass"] else "true"
-        await config_service.set_value(_antenna_cfg_key(chat.id, "enable_ass"), new_val)
-    elif action == "toggle_avd":
-        cfg = await _get_antenna_group_config(chat.id)
-        new_val = "false" if cfg["enable_avd"] else "true"
-        await config_service.set_value(_antenna_cfg_key(chat.id, "enable_avd"), new_val)
-    elif action == "refresh":
-        pass
-    else:
-        return
-
-    cfg = await _get_antenna_group_config(chat.id)
-    await query.edit_message_text(
-        _build_antenna_panel_text(chat.id, cfg),
-        reply_markup=_build_antenna_panel_keyboard(chat.id, cfg),
-        parse_mode='HTML'
-    )
 
 
