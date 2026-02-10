@@ -643,6 +643,12 @@ async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYP
     msg = update.edited_message if hasattr(update, "edited_message") else None
     if not msg:
         return
+
+    logger.info(
+        f"EDITED EVENT captured: chat={msg.chat.id}, msg={msg.message_id}, "
+        f"type={'voice' if msg.voice else 'text_or_caption'}, "
+        f"text_present={bool(msg.text)}, caption_present={bool(msg.caption)}"
+    )
     
     chat = msg.chat
     
