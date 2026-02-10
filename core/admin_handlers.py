@@ -4,6 +4,7 @@ from telegram.constants import ChatType
 from core.history_service import history_service
 from core.secure import is_admin, require_admin_access
 from utils.logger import logger
+import re
 @require_admin_access
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -432,6 +433,28 @@ async def push_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 简单的内存状态管理 (Key: UUID)
 import uuid
 PENDING_CONFIRMATIONS = {}
+
+
+def _merge_new_content_into_chat_xml(old_content: str, new_content: str) -> str:
+    """若旧内容为 <chat ...>...</chat>，仅替换标签内文本，保留属性。"""
+    text = old_content or ""
+    m = re.search(r"<chat(?P<attrs>[^>]*)>.*?</chat>", text, flags=re.DOTALL | re.IGNORECASE)
+    if not m:
+        return new_content
+
+    attrs = m.group("attrs") or ""
+    replacement = f"<chat{attrs}>{new_content}</chat>"
+    return re.sub(r"<chat[^>]*>.*?</chat>", replacement, text, count=1, flags=re.DOTALL | re.IGNORECASE)
+
+
+def _preview_visible_content(raw_content: str) -> str:
+    """/preview 展示用：优先显示 <chat> 标签内文本，隐藏标签本体。"""
+    text = raw_content or ""
+    m = re.search(r"<chat[^>]*>(?P<body>.*?)</chat>", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        return (m.group("body") or "").strip()
+    # 兜底：去掉其他标签，仅展示可读文本
+    return re.sub(r"<[^>]+>", "", text, flags=re.DOTALL).strip()
 
 @require_admin_access
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -949,7 +972,7 @@ async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "msg_id": msg_obj.message_id,
             "role": msg_obj.role,
             "msg_type": msg_obj.message_type or "text",
-            "content": html.escape(msg_obj.content or "")
+            "content": html.escape(_preview_visible_content(msg_obj.content or ""))
         })
 
     if not targets:
@@ -1088,10 +1111,14 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
         db_id = state["target_db_id"]
         msg_id = state["target_msg_id"]
         new_content = state["new_content"]
+        old_content = state.get("old_content", "")
         msg_type = state.get("message_type", "text") # Get type
+
+        # DB 保留原始 XML 结构（仅替换 <chat> 内文本）
+        db_content = _merge_new_content_into_chat_xml(old_content, new_content)
         
         # 1. DB Update
-        db_ok = await history_service.update_message_content_by_db_id(db_id, new_content, chat_id=chat_id)
+        db_ok = await history_service.update_message_content_by_db_id(db_id, db_content, chat_id=chat_id)
         
         if not db_ok:
             await query.edit_message_text("❌ 数据库更新失败 (可能已被删除)")
