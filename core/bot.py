@@ -128,6 +128,8 @@ def run_bot():
     from telegram.ext import MessageHandler, filters
     from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry, process_message_edit
     
+    # /antenna URL 输入接管（仅当 antenna_pending 存在时会拦截并停止后续处理）
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, antenna_action_callback), group=0)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
     application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
     application.add_handler(MessageHandler(filters.PHOTO, process_photo_entry))  # 图片消息处理

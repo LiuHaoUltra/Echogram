@@ -1,5 +1,5 @@
 from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes, ConversationHandler, ApplicationHandlerStop
 from telegram.constants import ParseMode, ChatType
 from core.history_service import history_service
 from core.secure import is_admin, require_admin_access
@@ -1030,7 +1030,7 @@ async def antenna_action_callback(update: Update, context: ContextTypes.DEFAULT_
         from core.config_service import config_service
         if not (text.startswith("http://") or text.startswith("https://")):
             await update.message.reply_text("❌ URL 必须以 http:// 或 https:// 开头。")
-            return
+            raise ApplicationHandlerStop
 
         await config_service.set_value(_antenna_cfg_key(chat.id, "antenna_api_base_url"), text)
         context.user_data.pop("antenna_pending", None)
@@ -1040,7 +1040,7 @@ async def antenna_action_callback(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=_build_antenna_panel_keyboard(chat.id, cfg),
             parse_mode='HTML'
         )
-        return
+        raise ApplicationHandlerStop
 
     if not query:
         return
