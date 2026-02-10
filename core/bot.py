@@ -79,9 +79,10 @@ def run_bot():
     # 注册处理器
     # ---------------------------------------------------------
     # 1. Admin Callbacks (最高优先级，防止被 Dashboard Catch-all 拦截)
-    from core.admin_handlers import admin_action_callback
+    from core.admin_handlers import admin_action_callback, antenna_action_callback
     from telegram.ext import CallbackQueryHandler
     application.add_handler(CallbackQueryHandler(admin_action_callback, pattern="^admin:"))
+    application.add_handler(CallbackQueryHandler(antenna_action_callback, pattern="^antenna:"))
 
     # 2. Dashboard 处理器 (包含 wizard, menu navigation 等)
     from dashboard.router import get_dashboard_handlers
@@ -91,7 +92,7 @@ def run_bot():
     from core.admin_handlers import (
         reset_command, stats_command, prompt_command, 
         debug_command, add_whitelist_command, remove_whitelist_command,
-        sub_command, push_now_command,
+        sub_command, push_now_command, antenna_command,
         edit_command, delete_command
     )
 
@@ -103,6 +104,7 @@ def run_bot():
     application.add_handler(CommandHandler("remove_whitelist", remove_whitelist_command))
     application.add_handler(CommandHandler("sub", sub_command))
     application.add_handler(CommandHandler("push_now", push_now_command))
+    application.add_handler(CommandHandler("antenna", antenna_command))
     
     application.add_handler(CommandHandler("edit", edit_command))
     application.add_handler(CommandHandler(["del", "delete"], delete_command))
@@ -112,6 +114,7 @@ def run_bot():
     from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry, process_message_edit
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, antenna_action_callback), group=1)
     application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
     application.add_handler(MessageHandler(filters.PHOTO, process_photo_entry))  # 图片消息处理
     application.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, process_message_edit)) # 原生编辑监听

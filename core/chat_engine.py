@@ -216,6 +216,28 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
 
     dynamic_summary = await summary_service.get_summary(chat_id)
 
+    # --- Antenna 非对称互通 (ASS/AVD) ---
+    # 可选配置：
+    # feature_flags.enable_echogram_ass_import_v1 = true
+    # feature_flags.enable_echogram_avd_search_v1 = true
+    # antenna_api_base_url = http://127.0.0.1:8765
+    # 群级优先（/antenna 面板），全局为兼容回退
+    g_base_key = f"bridge.{chat_id}.antenna_api_base_url"
+    g_ass_key = f"bridge.{chat_id}.enable_ass"
+    g_avd_key = f"bridge.{chat_id}.enable_avd"
+
+    antenna_base_url = (configs.get(g_base_key) or configs.get("antenna_api_base_url", "")).strip()
+    ass_enabled = str(configs.get(g_ass_key, configs.get("feature_flags.enable_echogram_ass_import_v1", "false"))).strip().lower() in ("1", "true", "yes", "on")
+    avd_enabled = str(configs.get(g_avd_key, configs.get("feature_flags.enable_echogram_avd_search_v1", "false"))).strip().lower() in ("1", "true", "yes", "on")
+
+    if ass_enabled and antenna_base_url:
+        try:
+            antenna_ass = await rag_service.fetch_antenna_ass(chat_id, base_url=antenna_base_url)
+            if antenna_ass:
+                dynamic_summary += f"\n\n[Antenna Session Summary]\n{antenna_ass}"
+        except Exception as e:
+            logger.warning(f"ASS import skipped: {e}")
+
         # --- RAG Integration & Core Locking ---
         # 按照指示，整个生成过程需要在锁内执行，以保证 Strict Serialization
     async with CHAT_LOCKS[chat_id]:
@@ -352,10 +374,29 @@ async def generate_response(chat_id: int, context: ContextTypes.DEFAULT_TYPE):
                     rewritten_query, 
                     exclude_ids=context_ids
                 )
-                
+
+                antenna_context = ""
+                if avd_enabled and antenna_base_url:
+                    try:
+                        antenna_context = await rag_service.search_antenna_context(
+                            chat_id=chat_id,
+                            query_text=rewritten_query,
+                            base_url=antenna_base_url,
+                            top_k=3,
+                            threshold=0.6,
+                        )
+                    except Exception as e:
+                        logger.warning(f"AVD search skipped: {e}")
+                 
                 if found_context:
                     rag_context = found_context
                     logger.info(f"RAG: Injected memory for '{current_query[:20]}...'")
+
+                if antenna_context:
+                    if rag_context:
+                        rag_context += f"\n\n[Relevant Antenna Memories]\n{antenna_context}"
+                    else:
+                        rag_context = f"[Relevant Antenna Memories]\n{antenna_context}"
         except Exception as e:
             logger.error(f"RAG Search Error: {e}")
     

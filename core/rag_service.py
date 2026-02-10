@@ -3,6 +3,7 @@ import asyncio
 import json
 import time
 from typing import List, Dict, Any, Optional
+import httpx
 from sqlalchemy import select, text, and_, bindparam
 from openai import AsyncOpenAI
 from config.settings import settings
@@ -24,6 +25,96 @@ class RagService:
         self._current_api_key = None
         self._current_base_url = None
         self._sync_cooldowns: Dict[int, float] = {}  # chat_id -> last_failure_time
+        # 非对称互通观测指标（进程内）
+        self._bridge_metrics: Dict[str, int] = {
+            "avd_search_total": 0,
+            "avd_search_hit": 0,
+            "avd_search_error": 0,
+        }
+
+    def get_bridge_metrics(self) -> Dict[str, int]:
+        """读取非对称互通观测指标"""
+        return dict(self._bridge_metrics)
+
+    def reset_bridge_metrics(self):
+        """重置非对称互通观测指标"""
+        for k in self._bridge_metrics.keys():
+            self._bridge_metrics[k] = 0
+
+    async def fetch_antenna_ass(self, chat_id: int, base_url: str, timeout: float = 5.0) -> str:
+        """从 Antenna 拉取最新 ASS（可选）"""
+        if not base_url:
+            return ""
+
+        url = base_url.rstrip("/") + "/api/memory/ass/latest"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                # 父子键策略：优先 bridge_user_id（父键=Telegram chat_id），兼容回传 session_id
+                resp = await client.get(
+                    url,
+                    params={
+                        "bridge_user_id": str(chat_id),
+                        "session_id": str(chat_id),
+                    },
+                )
+                if resp.status_code != 200:
+                    return ""
+                data = resp.json() or {}
+                ass = data.get("ass") or {}
+                text_val = (ass.get("summary") or "").strip()
+                return text_val
+        except Exception as e:
+            logger.warning(f"Antenna ASS fetch failed: {e}")
+            return ""
+
+    async def search_antenna_context(self, chat_id: int, query_text: str, base_url: str, top_k: int = 3, threshold: float = 0.6, timeout: float = 8.0) -> str:
+        """从 Antenna 拉取 AVD 检索结果（可选）"""
+        self._bridge_metrics["avd_search_total"] += 1
+        if not base_url:
+            return ""
+
+        q = (query_text or "").strip()
+        if not q:
+            return ""
+
+        url = base_url.rstrip("/") + "/api/memory/avd/search"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(
+                    url,
+                    params={
+                        "bridge_user_id": str(chat_id),
+                        "session_id": str(chat_id),
+                        "q": q,
+                        "top_k": int(top_k),
+                        "threshold": float(threshold),
+                    },
+                )
+                if resp.status_code != 200:
+                    return ""
+
+                data = resp.json() or {}
+                hits = data.get("hits") or []
+                if not hits:
+                    return ""
+
+                lines = []
+                for h in hits[:max(1, int(top_k))]:
+                    mid = h.get("memory_id") or h.get("msg_id")
+                    sim = h.get("similarity")
+                    content = (h.get("content") or "").strip()
+                    if len(content) > 240:
+                        content = content[:240] + "..."
+                    sim_str = f"{float(sim):.3f}" if sim is not None else "N/A"
+                    lines.append(f"[Antenna AVD] memory_id={mid}, similarity={sim_str}, content={content}")
+
+                if lines:
+                    self._bridge_metrics["avd_search_hit"] += 1
+                return "\n".join(lines)
+        except Exception as e:
+            self._bridge_metrics["avd_search_error"] += 1
+            logger.warning(f"Antenna AVD search failed: {e}")
+            return ""
 
     async def _notify_admin(self, text: str):
         """发送私信给管理员 (内部调试/透明化使用)"""

@@ -44,8 +44,18 @@ class HistoryService:
             await session.execute(delete(History))
             await session.commit()
 
-    async def add_message(self, chat_id: int, role: str, content: str, message_id: int = None, message_type: str = "text") -> History:
-        """添加一条新消息到历史记录"""
+    async def add_message(
+        self,
+        chat_id: int,
+        role: str,
+        content: str,
+        message_id: int = None,
+        message_type: str = "text",
+        reply_to_id: int = None,
+        reply_to_content: str = None,
+        file_id: str = None,
+    ) -> History:
+        """添加一条新消息到历史记录（兼容 reply/file 扩展字段）"""
         async for session in get_db_session():
             if message_id:
                 # 检查是否已存在 (避免重复)
@@ -59,7 +69,10 @@ class HistoryService:
                 role=role,
                 content=content,
                 message_id=message_id,
-                message_type=message_type
+                message_type=message_type,
+                reply_to_id=reply_to_id,
+                reply_to_content=reply_to_content,
+                file_id=file_id,
             )
             session.add(new_msg)
             await session.commit()
