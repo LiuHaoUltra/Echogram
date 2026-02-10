@@ -24,8 +24,16 @@ class RagService:
         self._current_api_key = None
         self._current_base_url = None
         self._sync_cooldowns: Dict[int, float] = {}  # chat_id -> last_failure_time
+
+    def _etl_debug(self, msg: str):
+        """RAG ETL 调试日志（默认关闭，避免日志膨胀）。"""
+        if settings.RAG_VERBOSE_LOG:
+            logger.info(msg)
+
     async def _notify_admin(self, text: str):
         """发送私信给管理员 (内部调试/透明化使用)"""
+        if not settings.RAG_NOTIFY_ADMIN:
+            return
         from core.bot import bot
         if bot and settings.ADMIN_USER_ID:
             try:
@@ -177,7 +185,7 @@ class RagService:
         策略: Context Barrier + Turn-based Assembly + Denoising
         只处理已经跌出活跃窗口 (Tier 1 -> Tier 2) 的消息。
         """
-        logger.info("RAG ETL: Starting background sync cycle...")
+        self._etl_debug("RAG ETL: Starting background sync cycle...")
         
         # 1. 获取所有活跃的 Chat ID
         # 简单起见，从 Recent History 找，或者遍历所有 Chat 配置。
@@ -210,7 +218,7 @@ class RagService:
             stats = await history_service.get_session_stats(chat_id, max_tokens)
             active_window_start_id = stats["win_start_id"]
             
-            logger.info(f"RAG ETL: Chat {chat_id} | BarrierID (from HistoryService): {active_window_start_id}")
+            self._etl_debug(f"RAG ETL: Chat {chat_id} | BarrierID (from HistoryService): {active_window_start_id}")
             
             if active_window_start_id == 0:
                  return
@@ -263,11 +271,11 @@ class RagService:
                     
                     if processed_ids:
                         await session.commit()
-                        logger.info(f"RAG ETL: Auto-cleaned {len(processed_ids)} orphans (System/Old) for Chat {chat_id}.")
+                        self._etl_debug(f"RAG ETL: Auto-cleaned {len(processed_ids)} orphans (System/Old) for Chat {chat_id}.")
                         await self._notify_admin(f"🧹 <b>ETL 自动清理 [Chat {chat_id}]</b>\n已清理 {len(processed_ids)} 条系统/过时消息（这些消息通常不含 RAG 价值）。")
                 return
 
-            logger.info(f"RAG ETL: Chat {chat_id} has {len(candidate_ids)} candidates falling out of context (barrier: {active_window_start_id}).")
+            self._etl_debug(f"RAG ETL: Chat {chat_id} has {len(candidate_ids)} candidates falling out of context (barrier: {active_window_start_id}).")
 
             # 3. Process each Candidate (Turn Assembly)
             for anchor_id in candidate_ids:
@@ -431,7 +439,7 @@ class RagService:
             )
 
         await session.commit()
-        logger.info(f"RAG ETL: Indexed Turn {real_head_id} (User: {len(user_ids)}, AI: {len(ai_ids)})")
+        self._etl_debug(f"RAG ETL: Indexed Turn {real_head_id} (User: {len(user_ids)}, AI: {len(ai_ids)})")
         
         # 7. 通知管理员
         msg = (
@@ -450,7 +458,7 @@ class RagService:
         现在接收与主模型完全一致的 Full Context (Active Window + Summary)。
         """
         # [DEBUG] Log entry
-        logger.info(f"RAG Rewriter: Input='{query_text}' (Len: {len(query_text)})")
+        self._etl_debug(f"RAG Rewriter: Input='{query_text}' (Len: {len(query_text)})")
 
 
 
@@ -466,7 +474,7 @@ class RagService:
                 logger.warning("RAG Rewriter: Skipped (No Model Configured)")
                 return query_text
 
-            logger.info(f"RAG Rewriter: Using model '{summary_model}'")
+            self._etl_debug(f"RAG Rewriter: Using model '{summary_model}'")
 
             client = await self._get_client()
             
@@ -507,10 +515,10 @@ class RagService:
                     new_query = new_query[1:-1]
                 
                 if new_query != query_text:
-                    logger.info(f"RAG Rewriter: '{query_text}' -> '{new_query}'")
+                    self._etl_debug(f"RAG Rewriter: '{query_text}' -> '{new_query}'")
                     try:
                         import core.bot as bot_module
-                        if bot_module.bot:
+                        if settings.RAG_NOTIFY_ADMIN and bot_module.bot:
                             rewrite_msg = (
                                 f"🔄 <b>RAG Query Rewritten</b>\n"
                                 f"From: <code>{html.escape(query_text)}</code>\n"
@@ -520,7 +528,7 @@ class RagService:
                     except Exception as notify_e:
                         logger.error(f"Failed to send rewrite debug: {notify_e}")
                 else:
-                    logger.info(f"RAG Rewriter: No change ('{new_query}').")
+                    self._etl_debug(f"RAG Rewriter: No change ('{new_query}').")
                 
                 return new_query
             

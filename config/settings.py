@@ -18,11 +18,15 @@ class Settings:
 
     # 日志配置
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", 10 * 1024 * 1024))  # 单日志文件最大体积，默认 10MB
+    LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", 3))  # 轮转保留份数
 
     # 记忆系统配置
     HISTORY_WINDOW_TOKENS = int(os.getenv("HISTORY_WINDOW_TOKENS", 6000))  # 历史窗口大小
     SUMMARY_TRIGGER_TOKENS = int(os.getenv("SUMMARY_TRIGGER_TOKENS", 2000))  # 摘要触发阈值
     SUMMARY_IDLE_SECONDS = int(os.getenv("SUMMARY_IDLE_SECONDS", 10800))  # 闲置触发时间
+    RAG_VERBOSE_LOG = os.getenv("RAG_VERBOSE_LOG", "false").strip().lower() in ("1", "true", "yes", "on")
+    RAG_NOTIFY_ADMIN = os.getenv("RAG_NOTIFY_ADMIN", "false").strip().lower() in ("1", "true", "yes", "on")
     
     # OpenAI API 配置
     OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")

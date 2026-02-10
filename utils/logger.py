@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+from logging.handlers import RotatingFileHandler
 from config.settings import settings
 
 def setup_logger():
@@ -17,13 +18,18 @@ def setup_logger():
     )
     handler.setFormatter(formatter)
     
-    # 文件输出（启动时清空重写）
+    # 文件输出（按大小轮转，避免日志无限膨胀）
     log_dir = "logs"
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     
     file_path = os.path.join(log_dir, "echogram.log")
-    file_handler = logging.FileHandler(file_path, mode='w', encoding='utf-8')
+    file_handler = RotatingFileHandler(
+        file_path,
+        maxBytes=settings.LOG_MAX_BYTES,
+        backupCount=settings.LOG_BACKUP_COUNT,
+        encoding='utf-8'
+    )
     file_handler.setFormatter(formatter)
     
     # 避免重复添加
