@@ -503,7 +503,9 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if target_id is None:
         if update.message.reply_to_message:
             target_id = int(update.message.reply_to_message.message_id)
-            new_content = body.strip()
+            # 更稳健地提取 /edit 后正文，兼容 /edit@BotName 与非常规空白
+            m = re.match(r"^/edit(?:@\w+)?\s*(?P<body>[\s\S]*)$", raw_text, flags=re.IGNORECASE)
+            new_content = (m.group("body") if m else body).strip()
         else:
             await update.message.reply_text(
                 "❌ 请使用显式分隔格式：<code>/edit &lt;ID&gt;, &lt;新内容&gt;</code>\n"
