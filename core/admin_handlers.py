@@ -460,73 +460,36 @@ def _preview_visible_content(raw_content: str) -> str:
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /edit 指令：修改历史消息
-    用法:
-    - /edit <ID>, <NewContent>
-    - 回复某条消息后：/edit <NewContent>
+    用法：回复某条消息后 /edit <NewContent>
     """
     user = update.effective_user
     chat = update.effective_chat
     
     # 鉴权移至装饰器
 
-    # 统一使用原始文本解析，避免空格分隔的不稳定行为
+    # 强制回复模式：必须先回复目标消息
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "❌ 请先回复要修改的那条消息，再发送 <code>/edit &lt;新内容&gt;</code>。",
+            parse_mode='HTML'
+        )
+        return
+
+    # 统一使用原始文本解析正文
     raw_text = (update.message.text or "").strip() if update.message and update.message.text else ""
-
-    # 解析逗号显式分隔格式：/edit <ID>, <NewContent>
-    # 支持英文逗号与中文逗号
-    # 例如：/edit 1984, 这是要改的新内容 或 /edit 1984，这是要改的新内容
-    target_id = None
-    new_content = ""
-    body = ""
-    if raw_text and raw_text.lower().startswith("/edit"):
-        body = raw_text.split(maxsplit=1)
-        body = body[1].strip() if len(body) > 1 else ""
-        delimiter = None
-        if "," in body:
-            delimiter = ","
-        elif "，" in body:
-            delimiter = "，"
-
-        if delimiter:
-            left, right = body.split(delimiter, 1)
-            left = left.strip()
-            right = right.strip()
-            if left:
-                try:
-                    target_id = int(left)
-                    new_content = right
-                except ValueError:
-                    # 若当前是“回复模式”，允许正文里出现逗号而不要求前置 ID
-                    if update.message.reply_to_message:
-                        target_id = int(update.message.reply_to_message.message_id)
-                        new_content = body.strip()
-                    else:
-                        await update.message.reply_text("❌ 逗号前必须是数字 ID。示例：<code>/edit 1984, 新内容</code>", parse_mode='HTML')
-                        return
-
-    # 若逗号格式没命中，只允许“回复模式”
-    if target_id is None:
-        if update.message.reply_to_message:
-            target_id = int(update.message.reply_to_message.message_id)
-            # 更稳健地提取 /edit 后正文，兼容 /edit@BotName 与非常规空白
-            m = re.match(r"^/edit(?:@\w+)?\s*(?P<body>[\s\S]*)$", raw_text, flags=re.IGNORECASE)
-            new_content = (m.group("body") if m else body).strip()
-        else:
-            await update.message.reply_text(
-                "❌ 请使用显式分隔格式：<code>/edit &lt;ID&gt;, &lt;新内容&gt;</code>\n"
-                "或先回复目标消息再发送 <code>/edit &lt;新内容&gt;</code>",
-                parse_mode='HTML'
-            )
-            return
+    target_id = int(update.message.reply_to_message.message_id)
+    m = re.match(r"^/edit(?:@\w+)?\s*(?P<body>[\s\S]*)$", raw_text, flags=re.IGNORECASE)
+    new_content = (m.group("body") if m else "").strip()
 
     if not new_content:
         await update.message.reply_text("❌ 新内容不能为空。")
         return
 
-    # 优先尝试作为 DB ID (Global ID) 获取对象
-    msg_obj = await history_service.get_message_by_db_id(target_id, chat_id=chat.id)
+    # 回复模式：优先按 TG message_id 精确定位
+    msg_obj = await history_service.get_message(chat.id, target_id)
     if not msg_obj:
-        msg_obj = await history_service.get_message(chat.id, target_id)
+        # 兼容极端情况：再尝试按 DB ID
+        msg_obj = await history_service.get_message_by_db_id(target_id, chat_id=chat.id)
 
     if not msg_obj:
         await update.message.reply_text(f"❌ 未找到 ID 为 `{target_id}` 的消息 (在此会话中)。", parse_mode='Markdown')
@@ -566,7 +529,8 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     import html
-    old_preview = html.escape(msg_obj.content[:200]) + "..." if len(msg_obj.content) > 200 else html.escape(msg_obj.content)
+    old_visible = _preview_visible_content(msg_obj.content)
+    old_preview = html.escape(old_visible[:200]) + "..." if len(old_visible) > 200 else html.escape(old_visible)
     new_preview = html.escape(new_content[:200]) + "..." if len(new_content) > 200 else html.escape(new_content)
     
     type_warn = ""
