@@ -146,6 +146,11 @@ def run_bot():
     # 允许回应更新
     # 显式指定类型以确保兼容性
     application.run_polling(
+        bootstrap_retries=-1,
+        connect_timeout=20,
+        read_timeout=30,
+        write_timeout=30,
+        pool_timeout=30,
         allowed_updates=[
             "message", "edited_message", "channel_post", "edited_channel_post",
             "inline_query", "chosen_inline_result", "callback_query",
