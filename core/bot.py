@@ -34,9 +34,7 @@ async def post_init(application: Application):
     bot = application.bot
     
     logger.info("Database initialized successfully.")
-    
-    logger.info("Database initialized successfully.")
-    
+
     # 确认连接
     bot_info = await application.bot.get_me()
     logger.info(f"Bot connected: @{bot_info.username} (ID: {bot_info.id})")
@@ -106,7 +104,7 @@ def run_bot():
     from core.admin_handlers import (
         reset_command, stats_command, prompt_command, 
         debug_command, add_whitelist_command, remove_whitelist_command,
-        sub_command, push_now_command,
+        sub_command, push_now_command, preview_command,
         edit_command, delete_command
     )
 
@@ -118,6 +116,7 @@ def run_bot():
     application.add_handler(CommandHandler("remove_whitelist", remove_whitelist_command))
     application.add_handler(CommandHandler("sub", sub_command))
     application.add_handler(CommandHandler("push_now", push_now_command))
+    application.add_handler(CommandHandler("preview", preview_command))
     
     application.add_handler(CommandHandler("edit", edit_command))
     application.add_handler(CommandHandler(["del", "delete"], delete_command))

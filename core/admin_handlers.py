@@ -648,6 +648,76 @@ def _render_delete_view(confirm_id: str, page: int = 0):
     
     return text, InlineKeyboardMarkup(keyboard)
 
+
+def _render_preview_view(confirm_id: str, page: int = 0):
+    """
+    Render text and keyboard for previewing DB message content.
+    Returns: (text, reply_markup) or (None, None) if state invalid.
+    """
+    state = PENDING_CONFIRMATIONS.get(confirm_id)
+    if not state:
+        return None, None
+
+    targets = state.get("targets", [])
+    total_items = len(targets)
+    if total_items <= 0:
+        return "⚠️ 无可预览消息。", InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ 关闭", callback_data=f"admin:cancel:{confirm_id}")]
+        ])
+
+    items_per_page = 2
+    total_pages = (total_items + items_per_page - 1) // items_per_page
+
+    if page < 0:
+        page = 0
+    if page >= total_pages:
+        page = total_pages - 1
+
+    start = page * items_per_page
+    end = start + items_per_page
+    page_items = targets[start:end]
+
+    blocks = []
+    for item in page_items:
+        content = item.get("content", "") or ""
+        if len(content) > 1200:
+            content = content[:1200] + "\n... (truncated)"
+        blocks.append(
+            f"• <b>{item['db_id']}|{item['msg_id']}</b> "
+            f"[{item['role']}/{item['msg_type']}]\n"
+            f"<pre>{content}</pre>"
+        )
+
+    body = "\n\n".join(blocks)
+    header = f"🔎 <b>数据库消息预览</b> ({total_items}条)"
+    if total_pages > 1:
+        header += f" [Page {page+1}/{total_pages}]"
+
+    text = (
+        f"{header}\n"
+        f"{body}"
+    )
+
+    keyboard = []
+    if total_pages > 1:
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin:page:{confirm_id}:{page-1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("Wait", callback_data="admin:ignore"))
+
+        nav_row.append(InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="admin:ignore"))
+
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin:page:{confirm_id}:{page+1}"))
+        else:
+            nav_row.append(InlineKeyboardButton("End", callback_data="admin:ignore"))
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("❌ 关闭", callback_data=f"admin:cancel:{confirm_id}")])
+
+    return text, InlineKeyboardMarkup(keyboard)
+
 @require_admin_access
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -770,6 +840,99 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
 
 
+@require_admin_access
+async def preview_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /preview 指令：预览数据库中的消息原文
+    用法:
+    - /preview <ID> (单个)
+    - /preview <ID> <ID> ... (空格分隔)
+    - /preview <ID> ... <Start>-<End> ... (混合范围)
+    - 回复某条消息并发送 /preview
+    """
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if chat.type == ChatType.PRIVATE:
+        await update.message.reply_text("⚠️ 请在群组中使用 /preview。")
+        return
+
+    target_ids = set()
+
+    # 场景 1: 回复引用
+    if update.message.reply_to_message:
+        target_ids.add(update.message.reply_to_message.message_id)
+
+    # 场景 2: 参数解析（与 /del 语法一致）
+    if context.args:
+        raw_args = " ".join(context.args)
+        normalized = raw_args.replace(" ", ",")
+        parts = [p.strip() for p in normalized.split(",") if p.strip()]
+
+        for part in parts:
+            if "-" in part:
+                try:
+                    start_s, end_s = part.split("-", 1)
+                    start, end = int(start_s), int(end_s)
+                    if start > end:
+                        start, end = end, start
+                    if (end - start) > 100:
+                        await update.message.reply_text(f"⚠️ 范围过大 ({part})，单次限制 100 条。已跳过。")
+                        continue
+                    for i in range(start, end + 1):
+                        target_ids.add(i)
+                except ValueError:
+                    continue
+            else:
+                try:
+                    clean_part = part.replace("/", "")
+                    if not clean_part:
+                        continue
+                    target_ids.add(int(clean_part))
+                except ValueError:
+                    continue
+
+    if not target_ids:
+        await update.message.reply_text("❌ 用法: `/preview <ID> [ID] [Start-End]` (空格分隔)", parse_mode='Markdown')
+        return
+
+    sorted_ids = sorted(list(target_ids))
+    targets = []
+
+    import html
+    for tid in sorted_ids:
+        msg_obj = await history_service.get_message_by_db_id(tid, chat_id=chat.id)
+        if not msg_obj:
+            msg_obj = await history_service.get_message(chat.id, tid)
+
+        if not msg_obj:
+            continue
+
+        targets.append({
+            "db_id": msg_obj.id,
+            "msg_id": msg_obj.message_id,
+            "role": msg_obj.role,
+            "msg_type": msg_obj.message_type or "text",
+            "content": html.escape(msg_obj.content or "")
+        })
+
+    if not targets:
+        await update.message.reply_text("⚠️ 未找到任何匹配的消息记录 (所有 ID 均无效)。")
+        return
+
+    confirm_id = str(uuid.uuid4())[:8]
+    PENDING_CONFIRMATIONS[confirm_id] = {
+        "type": "preview",
+        "chat_id": chat.id,
+        "user_id": user.id,
+        "targets": targets,
+        "timestamp": 0
+    }
+
+    text, markup = _render_preview_view(confirm_id, page=0)
+    await update.message.reply_text(text, reply_markup=markup, parse_mode='HTML')
+
+
 async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     处理 /del 和 /edit 的确认回调
@@ -810,7 +973,10 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # Handle Paging (No state cleanup yet)
     if action == "page":
         new_page = int(parts[3])
-        text, markup = _render_delete_view(confirm_id, page=new_page)
+        if state.get("type") == "preview":
+            text, markup = _render_preview_view(confirm_id, page=new_page)
+        else:
+            text, markup = _render_delete_view(confirm_id, page=new_page)
         if text:
             await query.answer() # Ack
             try:
@@ -825,7 +991,10 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     if action == "cancel":
         await query.answer("已取消")
-        await query.edit_message_text(f"❌ 操作已取消 (By {user.first_name})")
+        if state.get("type") == "preview":
+            await query.edit_message_text("✅ 预览已关闭")
+        else:
+            await query.edit_message_text(f"❌ 操作已取消 (By {user.first_name})")
         return
 
     await query.answer("Processing...")
@@ -930,5 +1099,8 @@ async def admin_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 await query.edit_message_text(f"✅ <b>听写已修正</b> (附言更新失败: {fail_reason})", parse_mode='HTML')
             else:
                 await query.edit_message_text(f"✅ <b>记忆已修正</b> (物理消息未变: {fail_reason})", parse_mode='HTML')
+
+    elif state["type"] == "preview":
+        await query.edit_message_text("✅ 预览已关闭")
 
 
