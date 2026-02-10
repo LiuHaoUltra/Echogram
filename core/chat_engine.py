@@ -644,12 +644,6 @@ async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYP
     if not msg:
         return
 
-    logger.info(
-        f"EDITED EVENT captured: chat={msg.chat.id}, msg={msg.message_id}, "
-        f"type={'voice' if msg.voice else 'text_or_caption'}, "
-        f"text_present={bool(msg.text)}, caption_present={bool(msg.caption)}"
-    )
-    
     chat = msg.chat
     
     # 简单的权限检查 (Optional, update logic is safe)

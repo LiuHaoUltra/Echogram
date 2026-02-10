@@ -437,24 +437,60 @@ PENDING_CONFIRMATIONS = {}
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /edit 指令：修改历史消息
-    用法: /edit <ID> <NewContent>
+    用法:
+    - /edit <ID>, <NewContent>
+    - 回复某条消息后：/edit <NewContent>
     """
     user = update.effective_user
     chat = update.effective_chat
     
     # 鉴权移至装饰器
 
-    if not context.args or len(context.args) < 2:
-        await update.message.reply_text("❌ 用法: `/edit <ID> <新内容>`", parse_mode='Markdown')
-        return
+    # 统一使用原始文本解析，避免空格分隔的不稳定行为
+    raw_text = (update.message.text or "").strip() if update.message and update.message.text else ""
 
-    target_id_str = context.args[0]
-    new_content = " ".join(context.args[1:])
-    
-    try:
-        target_id = int(target_id_str)
-    except ValueError:
-        await update.message.reply_text("❌ ID 必须是数字")
+    # 解析逗号显式分隔格式：/edit <ID>, <NewContent>
+    # 支持英文逗号与中文逗号
+    # 例如：/edit 1984, 这是要改的新内容 或 /edit 1984，这是要改的新内容
+    target_id = None
+    new_content = ""
+    body = ""
+    if raw_text and raw_text.lower().startswith("/edit"):
+        body = raw_text.split(maxsplit=1)
+        body = body[1].strip() if len(body) > 1 else ""
+        delimiter = None
+        if "," in body:
+            delimiter = ","
+        elif "，" in body:
+            delimiter = "，"
+
+        if delimiter:
+            left, right = body.split(delimiter, 1)
+            left = left.strip()
+            right = right.strip()
+            if left:
+                try:
+                    target_id = int(left)
+                    new_content = right
+                except ValueError:
+                    await update.message.reply_text("❌ 逗号前必须是数字 ID。示例：<code>/edit 1984, 新内容</code>", parse_mode='HTML')
+                    return
+
+    # 若逗号格式没命中，只允许“回复模式”
+    if target_id is None:
+        if update.message.reply_to_message:
+            target_id = int(update.message.reply_to_message.message_id)
+            new_content = body.strip()
+        else:
+            await update.message.reply_text(
+                "❌ 请使用显式分隔格式：<code>/edit &lt;ID&gt;, &lt;新内容&gt;</code>\n"
+                "或先回复目标消息再发送 <code>/edit &lt;新内容&gt;</code>",
+                parse_mode='HTML'
+            )
+            return
+
+    if not new_content:
+        await update.message.reply_text("❌ 新内容不能为空。")
         return
 
     # 优先尝试作为 DB ID (Global ID) 获取对象
