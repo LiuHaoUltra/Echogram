@@ -496,8 +496,13 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     target_id = int(left)
                     new_content = right
                 except ValueError:
-                    await update.message.reply_text("❌ 逗号前必须是数字 ID。示例：<code>/edit 1984, 新内容</code>", parse_mode='HTML')
-                    return
+                    # 若当前是“回复模式”，允许正文里出现逗号而不要求前置 ID
+                    if update.message.reply_to_message:
+                        target_id = int(update.message.reply_to_message.message_id)
+                        new_content = body.strip()
+                    else:
+                        await update.message.reply_text("❌ 逗号前必须是数字 ID。示例：<code>/edit 1984, 新内容</code>", parse_mode='HTML')
+                        return
 
     # 若逗号格式没命中，只允许“回复模式”
     if target_id is None:
