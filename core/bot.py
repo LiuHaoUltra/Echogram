@@ -1,3 +1,4 @@
+from telegram import Update
 from telegram.ext import ApplicationBuilder, Application, CommandHandler, ContextTypes
 from telegram.error import NetworkError
 from config.settings import settings
@@ -122,13 +123,14 @@ def run_bot():
     application.add_handler(CommandHandler(["del", "delete"], delete_command))
     
     # 聊天引擎处理器 (低优先级)
-    from telegram.ext import MessageHandler, filters
+    from telegram.ext import MessageHandler, TypeHandler, filters
     from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry, process_message_edit
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
     application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
     application.add_handler(MessageHandler(filters.PHOTO, process_photo_entry))  # 图片消息处理
-    application.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, process_message_edit)) # 原生编辑监听
+    # 原生编辑监听：使用 TypeHandler 捕获完整 Update，避免特定过滤器遗漏 edited_message
+    application.add_handler(TypeHandler(Update, process_message_edit), group=-1)
     
     # 回应处理器
     from telegram.ext import MessageReactionHandler

@@ -1,5 +1,5 @@
 from telegram import Update, constants
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ApplicationHandlerStop
 from openai import AsyncOpenAI
 import re
 import asyncio
@@ -639,8 +639,10 @@ async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYP
     处理已编辑的消息 (EDITED_MESSAGE)
     同步更新数据库中的内容
     """
-    msg = update.edited_message
-    if not msg: return
+    # 兼容两种入口：MessageHandler(filters.UpdateType.EDITED_MESSAGE) / TypeHandler(Update)
+    msg = update.edited_message if hasattr(update, "edited_message") else None
+    if not msg:
+        return
     
     chat = msg.chat
     
@@ -656,7 +658,7 @@ async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYP
             # 策略：忽略语音附言清空，避免误影响历史/RAG。
             # 若用户希望移除这段信息，需使用 /del。
             logger.info(f"EDITED [{chat.id}]: Voice caption cleared for Msg {msg.message_id}, ignored by policy.")
-            return
+            raise ApplicationHandlerStop
     else:
         new_text = msg.text or msg.caption or "[Media Content Updated]"
 
@@ -673,5 +675,8 @@ async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info(f"EDITED [{chat.id}]: Msg {msg.message_id} updated in DB.")
     else:
         logger.warning(f"EDITED [{chat.id}]: Msg {msg.message_id} not found in DB (too old?).")
+
+    # 已处理 edited_message，阻断后续 group 的 handler
+    raise ApplicationHandlerStop
 
 lazy_sender.set_callback(generate_response)
