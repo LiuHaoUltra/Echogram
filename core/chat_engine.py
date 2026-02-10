@@ -649,9 +649,26 @@ async def process_message_edit(update: Update, context: ContextTypes.DEFAULT_TYP
         if not await access_service.is_whitelisted(chat.id):
             return
 
-    new_text = msg.text or msg.caption or "[Media Content Updated]"
-    
+    # 对语音消息优先使用 caption（支持“发送后补附言/改附言”场景）
+    if msg.voice is not None:
+        new_text = (msg.caption or "").strip()
+        if not new_text:
+            # 策略：忽略语音附言清空，避免误影响历史/RAG。
+            # 若用户希望移除这段信息，需使用 /del。
+            logger.info(f"EDITED [{chat.id}]: Voice caption cleared for Msg {msg.message_id}, ignored by policy.")
+            return
+    else:
+        new_text = msg.text or msg.caption or "[Media Content Updated]"
+
     success = await history_service.update_message_content(chat.id, msg.message_id, new_text)
+
+    # 兜底：某些场景下 message_id 映射不到，改用 file_id 回写
+    if (not success) and msg.voice and msg.voice.file_id:
+        try:
+            success = await history_service.update_message_content_by_file_id(msg.voice.file_id, new_text)
+        except Exception as e:
+            logger.warning(f"EDITED [{chat.id}]: Fallback update by file_id failed: {e}")
+
     if success:
         logger.info(f"EDITED [{chat.id}]: Msg {msg.message_id} updated in DB.")
     else:
