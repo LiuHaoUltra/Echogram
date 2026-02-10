@@ -1,4 +1,5 @@
-from telegram.ext import ApplicationBuilder, Application, CommandHandler
+from telegram.ext import ApplicationBuilder, Application, CommandHandler, ContextTypes
+from telegram.error import NetworkError
 from config.settings import settings
 from config.database import init_db
 from utils.logger import logger
@@ -8,6 +9,17 @@ from core.news_push_service import news_push_service
 
 # 全局 Bot 实例，供服务层（如 RAG）在无 Context 场景下使用
 bot = None
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """全局异常处理：网络抖动降噪，其它异常保留堆栈"""
+    err = context.error
+
+    if isinstance(err, NetworkError):
+        logger.warning(f"Telegram transient network error: {err}")
+        return
+
+    logger.error(f"Unhandled exception in Telegram handler: {err}", exc_info=err)
 
 async def post_init(application: Application):
     """
@@ -75,6 +87,9 @@ def run_bot():
         .post_init(post_init)\
         .build()
 
+    # 全局错误处理（避免 No error handlers are registered）
+    application.add_error_handler(on_error)
+
     # ---------------------------------------------------------
     # 注册处理器
     # ---------------------------------------------------------
@@ -114,7 +129,6 @@ def run_bot():
     from core.chat_engine import process_message_entry, process_voice_message_entry, process_photo_entry, process_message_edit
     
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message_entry))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, antenna_action_callback), group=1)
     application.add_handler(MessageHandler(filters.VOICE, process_voice_message_entry))  # 语音消息处理
     application.add_handler(MessageHandler(filters.PHOTO, process_photo_entry))  # 图片消息处理
     application.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, process_message_edit)) # 原生编辑监听
